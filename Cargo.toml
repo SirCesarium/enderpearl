@@ -2,9 +2,16 @@
 name = "mc-gate"
 version = "0.1.0"
 edition = "2024"
+authors = ["SirCesarium"]
+description = "A lightweight L4 protocol multiplexer with zero-copy routing."
+license = "MIT"
+repository = "https://github.com/sircesarium/mc-gate"
+homepage = "https://github.com/sircesarium/mc-gate"
+documentation = "https://docs.rs/mc-gate"
+readme = "README.md"
 
 [dependencies]
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"], optional = true }
 dashmap = "6.1.0"
 futures = "0.3.32"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -12,6 +19,17 @@ serde_json = "1.0.149"
 t-port = { version = "1.1.0", default-features = false }
 tokio = { version = "1.49.0", features = ["full"] }
 
+[features]
+default = ["cli"]
+cli = ["dep:clap"]
+
 [[bin]]
 name = "mcg"
 path = "src/main.rs"
+required-features = ["cli"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

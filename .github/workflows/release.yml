@@ -1,0 +1,60 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Lint
+        run: cargo clippy -- -D warnings
+
+      - name: Run Tests
+        run: cargo test --all-features
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Release Binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/tp
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/sircesarium/mc-gate:latest
+            ghcr.io/sircesarium/mc-gate:${{ github.ref_name }}
+
+  publish-crates-io:
+    name: Publish to Crates.io
+    needs: build-and-upload 
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cargo Publish
+        run: cargo publish --token ${{ secrets.CRATES_TOKEN }}
