@@ -1,23 +1,18 @@
-mod mc;
-
 use clap::{Parser, ValueEnum};
-use dashmap::DashMap;
+use mc_gate::{Config, WakeupCondition, run};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
-use t_port::{Protocol, identify, tunnel};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::time::timeout;
+use std::sync::atomic::AtomicBool;
+use tokio::process::Command;
 
 #[derive(ValueEnum, Clone, Debug, PartialEq)]
-pub enum WakeupCondition {
+pub enum WakeupArg {
     Motd,
     Join,
     Disabled,
 }
 
 #[derive(Parser)]
-struct Config {
+struct Cli {
     #[arg(short, long, default_value = "0.0.0.0:25565")]
     listen: String,
     #[arg(short, long, default_value = "127.0.0.1:80")]
@@ -27,86 +22,67 @@ struct Config {
     #[arg(short, long)]
     on_wakeup: Option<String>,
     #[arg(long, value_enum, default_value = "motd")]
-    wakeup_on: WakeupCondition,
+    wakeup_on: WakeupArg,
     #[arg(short, long, default_value_t = false)]
     debug: bool,
-
-    #[arg(skip)]
-    pub is_waking: AtomicBool,
-}
-
-pub struct UserHistory {
-    pub attempts: u32,
-    pub last_seen: Instant,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = Arc::new(Config::parse());
-    let history: Arc<DashMap<String, UserHistory>> = Arc::new(DashMap::new());
-    let listener = TcpListener::bind(&cfg.listen).await?;
-    println!("Proxy active on {}", cfg.listen);
+    let args = Cli::parse();
+
+    let cond = match args.wakeup_on {
+        WakeupArg::Motd => WakeupCondition::Motd,
+        WakeupArg::Join => WakeupCondition::Join,
+        WakeupArg::Disabled => WakeupCondition::Disabled,
+    };
+
+    let callback = args.on_wakeup.map(|cmd_str| {
+        let debug = args.debug;
+        let cb: mc_gate::WakeupCallback = Arc::new(move || {
+            let cmd_to_run = cmd_str.clone();
+            Box::pin(async move {
+                if debug {
+                    println!("Executing wakeup command...");
+                }
+                let mut cmd = if cfg!(target_os = "windows") {
+                    let mut c = Command::new("cmd");
+                    c.args(["/C", &cmd_to_run]);
+                    c
+                } else {
+                    let mut c = Command::new("sh");
+                    c.args(["-c", &cmd_to_run]);
+                    c
+                };
+                cmd.kill_on_drop(true);
+                match cmd.status().await {
+                    Ok(s) if s.success() => {
+                        if debug {
+                            println!("Wakeup command executed successfully");
+                        }
+                    }
+                    Ok(s) => eprintln!("Wakeup command failed: {}", s),
+                    Err(e) => eprintln!("Failed to execute: {}", e),
+                }
+            })
+        });
+        cb
+    });
+
+    let cfg = Arc::new(Config {
+        listen: args.listen,
+        web: args.web,
+        mc: args.mc,
+        wakeup_on: cond,
+        debug: args.debug,
+        on_wakeup: callback,
+        is_waking: AtomicBool::new(false),
+    });
 
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         std::process::exit(0);
     });
 
-    let history_gc = Arc::clone(&history);
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            history_gc.retain(|_, v| v.last_seen.elapsed() < Duration::from_secs(300));
-        }
-    });
-
-    loop {
-        let (socket, addr) = listener.accept().await?;
-        let cfg = Arc::clone(&cfg);
-        let history = Arc::clone(&history);
-        let ip = addr.ip().to_string();
-
-        tokio::spawn(async move {
-            let _ = process(socket, cfg, history, ip).await;
-        });
-    }
-}
-
-async fn process(
-    mut socket: TcpStream,
-    cfg: Arc<Config>,
-    history: Arc<DashMap<String, UserHistory>>,
-    ip: String,
-) -> tokio::io::Result<()> {
-    let mut head = [0u8; 8];
-    let n = timeout(Duration::from_secs(2), socket.peek(&mut head[..]))
-        .await
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "peek timeout"))??;
-
-    match identify(&head[..n]) {
-        Protocol::Http => tunnel(socket, cfg.web.clone()).await,
-        Protocol::Binary => {
-            if let Ok(Ok(mut target)) =
-                timeout(Duration::from_secs(1), TcpStream::connect(&cfg.mc)).await
-            {
-                cfg.is_waking.store(false, Ordering::SeqCst);
-                tokio::io::copy_bidirectional(&mut socket, &mut target).await?;
-                return Ok(());
-            }
-
-            if cfg.on_wakeup.is_some() {
-                let state = mc::inspect_handshake(&socket).await;
-                mc::handler::McHandler::send_fallback(&mut socket, state, cfg, history, ip).await
-            } else {
-                if cfg.debug {
-                    println!(
-                        "Connection to {} failed and no on-wakeup command set. Closing.",
-                        cfg.mc
-                    );
-                }
-                Ok(())
-            }
-        }
-    }
+    run(cfg).await
 }
