@@ -1,12 +1,20 @@
 mod mc;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use dashmap::DashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use t_port::{Protocol, identify, tunnel};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
+
+#[derive(ValueEnum, Clone, Debug, PartialEq)]
+pub enum WakeupCondition {
+    Motd,
+    Join,
+    Disabled,
+}
 
 #[derive(Parser)]
 struct Config {
@@ -16,6 +24,15 @@ struct Config {
     web: String,
     #[arg(short, long, default_value = "127.0.0.1:25567")]
     mc: String,
+    #[arg(short, long)]
+    on_wakeup: Option<String>,
+    #[arg(long, value_enum, default_value = "motd")]
+    wakeup_on: WakeupCondition,
+    #[arg(short, long, default_value_t = false)]
+    debug: bool,
+
+    #[arg(skip)]
+    pub is_waking: AtomicBool,
 }
 
 pub struct UserHistory {
@@ -29,6 +46,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let history: Arc<DashMap<String, UserHistory>> = Arc::new(DashMap::new());
     let listener = TcpListener::bind(&cfg.listen).await?;
     println!("Proxy active on {}", cfg.listen);
+
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        std::process::exit(0);
+    });
 
     let history_gc = Arc::clone(&history);
     tokio::spawn(async move {
@@ -68,13 +90,23 @@ async fn process(
             if let Ok(Ok(mut target)) =
                 timeout(Duration::from_secs(1), TcpStream::connect(&cfg.mc)).await
             {
+                cfg.is_waking.store(false, Ordering::SeqCst);
                 tokio::io::copy_bidirectional(&mut socket, &mut target).await?;
                 return Ok(());
             }
 
-            let state = mc::inspect_handshake(&socket).await;
-            mc::handler::McHandler::send_fallback(&mut socket, state, cfg.mc.clone(), history, ip)
-                .await
+            if cfg.on_wakeup.is_some() {
+                let state = mc::inspect_handshake(&socket).await;
+                mc::handler::McHandler::send_fallback(&mut socket, state, cfg, history, ip).await
+            } else {
+                if cfg.debug {
+                    println!(
+                        "Connection to {} failed and no on-wakeup command set. Closing.",
+                        cfg.mc
+                    );
+                }
+                Ok(())
+            }
         }
     }
 }
