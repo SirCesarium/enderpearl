@@ -15,8 +15,8 @@ pub enum WakeupArg {
 struct Cli {
     #[arg(short, long, default_value = "0.0.0.0:25565")]
     listen: String,
-    #[arg(short, long, default_value = "127.0.0.1:80")]
-    web: String,
+    #[arg(short, long)]
+    web: Option<String>,
     #[arg(short, long, default_value = "127.0.0.1:25567")]
     mc: String,
     #[arg(short, long)]

@@ -20,7 +20,7 @@ pub enum WakeupCondition {
 
 pub struct Config {
     pub listen: String,
-    pub web: String,
+    pub web: Option<String>,
     pub mc: String,
     pub wakeup_on: WakeupCondition,
     pub debug: bool,
@@ -71,7 +71,16 @@ async fn process(
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "peek timeout"))??;
 
     match identify(&head[..n]) {
-        Protocol::Http => tunnel(socket, cfg.web.clone()).await,
+        Protocol::Http => {
+            if let Some(web_target) = &cfg.web {
+                tunnel(socket, web_target.clone()).await
+            } else {
+                if cfg.debug {
+                    println!("HTTP request received but no web target configured. Closing.");
+                }
+                Ok(())
+            }
+        }
         Protocol::Binary => {
             if let Ok(Ok(mut target)) =
                 timeout(Duration::from_secs(1), TcpStream::connect(&cfg.mc)).await
