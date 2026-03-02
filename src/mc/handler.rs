@@ -8,7 +8,6 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
-use tokio::process::Command;
 use tokio::time::sleep;
 
 pub struct McHandler;
@@ -125,7 +124,7 @@ impl McHandler {
     }
 
     async fn trigger_wakeup(cfg: Arc<Config>) {
-        if let Some(raw_cmd) = &cfg.on_wakeup {
+        if let Some(callback) = &cfg.on_wakeup {
             if cfg
                 .is_waking
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -134,43 +133,9 @@ impl McHandler {
                 return;
             }
 
-            let cmd_to_run = raw_cmd.clone();
-            let cfg_clone = Arc::clone(&cfg);
-
+            let cb = Arc::clone(callback);
             tokio::spawn(async move {
-                if cfg_clone.debug {
-                    println!("Executing wakeup command...");
-                }
-
-                let mut cmd = if cfg!(target_os = "windows") {
-                    let mut c = Command::new("cmd");
-                    c.args(["/C", &cmd_to_run]);
-                    c
-                } else {
-                    let mut c = Command::new("sh");
-                    c.args(["-c", &cmd_to_run]);
-                    #[cfg(unix)]
-                    c.process_group(0);
-                    c
-                };
-
-                cmd.kill_on_drop(true);
-
-                match cmd.status().await {
-                    Ok(status) if status.success() => {
-                        if cfg_clone.debug {
-                            println!("Wakeup command executed successfully");
-                        }
-                    }
-                    Ok(status) => {
-                        eprintln!("Wakeup command failed: {}", status);
-                        cfg_clone.is_waking.store(false, Ordering::SeqCst);
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to execute: {}", e);
-                        cfg_clone.is_waking.store(false, Ordering::SeqCst);
-                    }
-                }
+                cb().await;
             });
         }
     }
