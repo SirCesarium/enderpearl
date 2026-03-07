@@ -35,7 +35,7 @@ impl McHandler {
         }
 
         if state == 1 {
-            Self::handle_wakeup(socket, cfg.mc.clone()).await
+            Self::handle_wakeup(socket, cfg).await
         } else {
             let attempts = {
                 let mut entry = history.entry(ip).or_insert(UserHistory {
@@ -53,14 +53,14 @@ impl McHandler {
             };
 
             if attempts >= 3 {
-                Self::handle_waitlist(socket, cfg.mc.clone()).await
+                Self::handle_waitlist(socket, cfg).await
             } else {
-                Self::handle_disconnect(socket, attempts).await
+                Self::handle_disconnect(socket, attempts, cfg).await
             }
         }
     }
 
-    async fn handle_wakeup(socket: &mut TcpStream, target: String) -> tokio::io::Result<()> {
+    async fn handle_wakeup(socket: &mut TcpStream, cfg: Arc<Config>) -> tokio::io::Result<()> {
         let response = StatusResponse {
             version: Version {
                 name: "mc-gate".to_string(),
@@ -71,7 +71,7 @@ impl McHandler {
                 online: "???".to_string(),
             },
             description: Description {
-                text: "§c§l⚡ §eServer currently waking up...\n§7Please wait a moment.".to_string(),
+                text: cfg.msg_motd.clone(),
             },
         };
 
@@ -83,7 +83,7 @@ impl McHandler {
         {
             let start = Instant::now();
             while start.elapsed().as_secs() < 120 {
-                if TcpStream::connect(&target).await.is_ok() {
+                if TcpStream::connect(&cfg.mc).await.is_ok() {
                     tokio::io::AsyncWriteExt::write_all(socket, &buf[..n]).await?;
                     return Ok(());
                 }
@@ -93,13 +93,12 @@ impl McHandler {
         Ok(())
     }
 
-    async fn handle_waitlist(socket: &mut TcpStream, target: String) -> tokio::io::Result<()> {
+    async fn handle_waitlist(socket: &mut TcpStream, cfg: Arc<Config>) -> tokio::io::Result<()> {
         let start = Instant::now();
         while start.elapsed().as_secs() < 28 {
-            if TcpStream::connect(&target).await.is_ok() {
+            if TcpStream::connect(&cfg.mc).await.is_ok() {
                 let res = DisconnectResponse {
-                    text: "§6Server §a§lONLINE§r§6!\n\n§6§lTry to join the server normally."
-                        .to_string(),
+                    text: cfg.msg_online.clone(),
                 };
                 return MinecraftPacket::send_json(socket, 0x00, &res).await;
             }
@@ -107,18 +106,18 @@ impl McHandler {
         }
 
         let res = DisconnectResponse {
-            text: "§c§l⚡ §eWaitlist timeout...\n\n§7The server is taking too long to start.\n§ePlease try again in a few minutes.".to_string(),
+            text: cfg.msg_timeout.clone(),
         };
         MinecraftPacket::send_json(socket, 0x00, &res).await
     }
 
-    async fn handle_disconnect(socket: &mut TcpStream, attempts: u32) -> tokio::io::Result<()> {
+    async fn handle_disconnect(socket: &mut TcpStream, attempts: u32, cfg: Arc<Config>) -> tokio::io::Result<()> {
         sleep(Duration::from_millis(10)).await;
         let text = if attempts == 1 {
-            "§6§l⚡ §eServer still starting...\n\n§7Please wait a moment while the world loads.\n\n§8[§eNote§8] §eIf the ping bar stays §9blue/idle§e, please\n§etry to re-join manually in §c2 minutes§e.".to_string()
+            &cfg.msg_starting
         } else {
-            "§6§l⚡ §eServer still starting...\n\n§c§lNext attempt will put you in a waitlist.\n§7(We will notify you when the server is ready)".to_string()
-        };
+            &cfg.msg_waitlist
+        }.to_string();
 
         MinecraftPacket::send_json(socket, 0x00, &DisconnectResponse { text }).await
     }

@@ -26,6 +26,12 @@ pub struct Config {
     pub debug: bool,
     pub on_wakeup: Option<WakeupCallback>,
     pub is_waking: AtomicBool,
+
+    pub msg_motd: String,
+    pub msg_starting: String,
+    pub msg_waitlist: String,
+    pub msg_online: String,
+    pub msg_timeout: String,
 }
 
 pub struct UserHistory {

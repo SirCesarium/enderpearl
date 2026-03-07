@@ -25,6 +25,36 @@ struct Cli {
     wakeup_on: WakeupArg,
     #[arg(short, long, default_value_t = false)]
     debug: bool,
+
+    #[arg(
+        long,
+        default_value = "§c§l⚡ §eServer currently waking up...\n§7Please wait a moment."
+    )]
+    msg_motd: String,
+
+    #[arg(
+        long,
+        default_value = "§6§l⚡ §eServer still starting...\n\n§7Please wait a moment while the world loads.\n\n§8[§eNote§8] §eIf the ping bar stays §9blue/idle§e, please\n§etry to re-join manually in §c2 minutes§e."
+    )]
+    msg_starting: String,
+
+    #[arg(
+        long,
+        default_value = "§6§l⚡ §eServer still starting...\n\n§c§lNext attempt will put you in a waitlist.\n§7(We will notify you when the server is ready)"
+    )]
+    msg_waitlist: String,
+
+    #[arg(
+        long,
+        default_value = "§6Server §a§lONLINE§r§6!\n\n§6§lTry to join the server normally."
+    )]
+    msg_online: String,
+
+    #[arg(
+        long,
+        default_value = "§c§l⚡ §eWaitlist timeout...\n\n§7The server is taking too long to start.\n§ePlease try again in a few minutes."
+    )]
+    msg_timeout: String,
 }
 
 #[tokio::main]
@@ -77,6 +107,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         debug: args.debug,
         on_wakeup: callback,
         is_waking: AtomicBool::new(false),
+
+        msg_motd: args.msg_motd,
+        msg_starting: args.msg_starting,
+        msg_waitlist: args.msg_waitlist,
+        msg_online: args.msg_online,
+        msg_timeout: args.msg_timeout,
     });
 
     tokio::spawn(async move {
