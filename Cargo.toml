@@ -1,6 +1,6 @@
 [package]
 name = "mc-gate"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["SirCesarium"]
 description = "Async proxy for Minecraft and HTTP traffic with automated server wake-up."
