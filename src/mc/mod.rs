@@ -67,10 +67,14 @@ impl MinecraftPacket {
     }
 }
 
+const MAX_HANDSHAKE_SIZE: usize = 512;
+
 pub async fn inspect_handshake(socket: &TcpStream) -> i32 {
-    let mut buf = [0u8; 128];
+    let mut buf = [0u8; MAX_HANDSHAKE_SIZE];
+    
     if let Ok(n) = socket.peek(&mut buf[..]).await {
         let mut cur = Cursor::new(&buf[..n]);
+
         let _ = codec::read_varint(&mut cur).await;
         if let Ok(0x00) = codec::read_varint(&mut cur).await {
             let _ = codec::read_varint(&mut cur).await;
