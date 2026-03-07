@@ -3,7 +3,7 @@ use tokio::io::AsyncReadExt;
 
 pub async fn read_varint<R: AsyncReadExt + Unpin>(reader: &mut R) -> tokio::io::Result<i32> {
     let mut value = 0;
-    let mut position = 0;
+    let mut position: i32 = 0;
     let mut byte_buf = [0u8; 1];
     loop {
         reader.read_exact(&mut byte_buf[..]).await?;
