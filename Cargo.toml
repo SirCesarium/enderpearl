@@ -1,13 +1,13 @@
 [package]
-name = "mc-gate"
+name = "enderpearl"
 version = "0.1.1"
 edition = "2024"
 authors = ["SirCesarium"]
 description = "Async proxy for Minecraft and HTTP traffic with automated server wake-up."
 license = "MIT"
-repository = "https://github.com/sircesarium/mc-gate"
-homepage = "https://github.com/sircesarium/mc-gate"
-documentation = "https://docs.rs/mc-gate"
+repository = "https://github.com/sircesarium/enderpearl"
+homepage = "https://github.com/sircesarium/enderpearl"
+documentation = "https://docs.rs/enderpearl"
 readme = "README.md"
 
 [dependencies]
@@ -24,7 +24,7 @@ default = ["cli"]
 cli = ["dep:clap"]
 
 [[bin]]
-name = "mcg"
+name = "enderpearl"
 path = "src/main.rs"
 required-features = ["cli"]
 

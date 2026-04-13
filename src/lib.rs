@@ -11,7 +11,7 @@ use tokio::time::timeout;
 
 pub type WakeupCallback = Arc<dyn Fn() -> BoxFuture<'static, ()> + Send + Sync>;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WakeupCondition {
     Motd,
     Join,
