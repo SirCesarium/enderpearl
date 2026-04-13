@@ -1,5 +1,5 @@
 use clap::{Parser, ValueEnum};
-use mc_gate::{Config, WakeupCondition, run};
+use enderpearl::{Config, WakeupCondition, run};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::process::Command;
@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let callback = args.on_wakeup.map(|cmd_str| {
         let debug = args.debug;
-        let cb: mc_gate::WakeupCallback = Arc::new(move || {
+        let cb: enderpearl::WakeupCallback = Arc::new(move || {
             let cmd_to_run = cmd_str.clone();
             Box::pin(async move {
                 if debug {
