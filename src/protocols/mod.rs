@@ -1,7 +1,14 @@
 pub mod bedrock;
-pub mod cmd;
 pub mod java;
 
 pub use bedrock::MinecraftBedrock;
-pub use cmd::UdpCommands;
 pub use java::MinecraftJava;
+use refractium::{Http, hook_protocol};
+
+use crate::hooks::packet_logger::PacketLogger;
+
+hook_protocol!(
+    wrapper: HookedHttp,
+    proto: Http,
+    hooks: [PacketLogger]
+);
