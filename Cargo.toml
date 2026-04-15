@@ -12,7 +12,6 @@ readme = "README.md"
 
 [dependencies]
 anyhow = "1"
-clap = { version = "4.5", features = ["derive"], optional = true }
 dashmap = "6.1"
 futures = "0.3"
 refractium = { version = "2", default-features = false, features = [
@@ -23,10 +22,27 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+clap = { version = "4.5", features = ["derive"], optional = true }
+indicatif = { version = "0.18", optional = true }
 
 [features]
-default = ["cli"]
+default = ["cli", "java", "fake-motd", "wait-list", "pretty-cli"]
+
+# Groups
+full = ["cli", "java", "bedrock", "fake-motd", "wait-list", "web"]
+
+# Protocol logic
+java = []
+bedrock = []
+web = []
+
+# Logic Features
+fake-motd = []
+wait-list = []
+
+# UI/UX Features
 cli = ["dep:clap"]
+pretty-cli = ["cli", "dep:indicatif"]
 
 [[bin]]
 name = "enderpearl"
