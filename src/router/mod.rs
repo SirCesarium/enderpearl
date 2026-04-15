@@ -2,7 +2,7 @@ pub mod registry;
 pub mod routes;
 
 use refractium::Refractium;
-use std::net::SocketAddr;
+use std::{error, net::SocketAddr};
 
 pub struct EnderRouter {
     inner: Refractium,
@@ -21,7 +21,7 @@ impl EnderRouter {
         Self { inner }
     }
 
-    pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn error::Error>> {
         let t = self.inner.run_tcp(addr);
         let u = self.inner.run_udp(addr);
 
