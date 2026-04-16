@@ -1,25 +1,21 @@
-#[cfg(feature = "web")]
-use crate::protocols::HookedHttp;
 use refractium::ProtocolRegistry;
 use std::sync::Arc;
 
 #[cfg(feature = "java")]
-use crate::protocols::MinecraftJava;
+use crate::protocols::java::MinecraftJava;
 
 #[cfg(feature = "bedrock")]
-use crate::protocols::MinecraftBedrock;
+use crate::protocols::bedrock::MinecraftBedrock;
+
+#[cfg(feature = "web")]
+use crate::protocols::web::HookedHttp;
 
 #[must_use]
 pub fn create_registries() -> (Arc<ProtocolRegistry>, Arc<ProtocolRegistry>) {
-    let tcp_r = ProtocolRegistry::new();
-
-    #[cfg(any(feature = "java", feature = "web"))]
-    let mut tcp_r = tcp_r;
-
-    let udp_r = ProtocolRegistry::new();
-
-    #[cfg(feature = "bedrock")]
-    let mut udp_r = udp_r;
+    #[allow(unused_mut)]
+    let mut tcp_r = ProtocolRegistry::new();
+    #[allow(unused_mut)]
+    let mut udp_r = ProtocolRegistry::new();
 
     #[cfg(feature = "java")]
     tcp_r.register(Arc::new(MinecraftJava));

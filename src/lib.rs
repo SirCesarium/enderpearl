@@ -7,5 +7,7 @@ pub mod errors;
 pub mod hooks;
 pub mod protocols;
 
+pub(crate) mod macros;
+
 pub use crate::core::router::EnderRouter;
 pub use crate::errors::{EnderError, Result};

@@ -1,4 +1,4 @@
-use crate::core::{registry, routes};
+use crate::core::{registry, routes, types::EnderConfig};
 use crate::errors::Result;
 use refractium::Refractium;
 use std::net::SocketAddr;
@@ -7,22 +7,17 @@ pub struct EnderRouter {
     inner: Refractium,
 }
 
-impl Default for EnderRouter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl EnderRouter {
-    #[must_use]
-    pub fn new() -> Self {
+    pub fn new(config: &EnderConfig) -> Result<Self> {
         let (tcp_registry, udp_registry) = registry::create_registries();
-        let config = routes::load_routes();
+        let (tcp_routes, udp_routes) = routes::map_to_refractium(config)?;
+
         let inner = Refractium::builder()
             .registries(tcp_registry, udp_registry)
-            .routes(config.tcp, config.udp)
+            .routes(tcp_routes, udp_routes)
             .build();
-        Self { inner }
+
+        Ok(Self { inner })
     }
 
     pub async fn serve(self, addr: SocketAddr) -> Result<()> {
