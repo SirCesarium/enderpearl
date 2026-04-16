@@ -1,36 +1,51 @@
+use crate::core::types::EnderConfig;
+use crate::errors::{EnderError, Result};
+use crate::print_cli;
+use crate::protocols::PROTOCOLS;
 use std::collections::HashMap;
 
-pub struct RouteConfig {
-    pub tcp: HashMap<String, Vec<String>>,
-    pub udp: HashMap<String, Vec<String>>,
-}
+pub type RefractiumRoutes = HashMap<String, Vec<String>>;
 
-#[must_use]
-pub fn load_routes() -> RouteConfig {
-    let tcp = HashMap::new();
+pub fn map_to_refractium(config: &EnderConfig) -> Result<(RefractiumRoutes, RefractiumRoutes)> {
+    let mut tcp = HashMap::new();
+    let mut udp = HashMap::new();
 
-    #[cfg(any(feature = "java", feature = "web"))]
-    let mut tcp = tcp;
+    for (name, route) in &config.upstreams {
+        let proto = PROTOCOLS
+            .iter()
+            .find(|p| p.id == name || p.aliases.contains(&name.as_str()))
+            .ok_or_else(|| {
+                #[cfg(feature = "pretty-cli")]
+                {
+                    use owo_colors::OwoColorize;
+                    EnderError::Config(format!("Unknown protocol: {}", name.bold().bright_red()))
+                }
+                #[cfg(not(feature = "pretty-cli"))]
+                EnderError::Config(format!("Unknown protocol: {name}"))
+            })?;
 
-    let udp = HashMap::new();
+        if !proto.is_enabled {
+            return Err(EnderError::Config(format!(
+                "Upstream '{}' requires '{}' feature but it is disabled",
+                name, proto.feature
+            )));
+        }
 
-    #[cfg(feature = "bedrock")]
-    let mut udp = udp;
+        #[cfg(feature = "pretty-cli")]
+        {
+            use owo_colors::OwoColorize;
+            print_cli!(
+                "{} -> {}",
+                proto.kind.to_string().bright_cyan(),
+                route.targets.join(", ").underline()
+            );
+        }
+        #[cfg(not(feature = "pretty-cli"))]
+        print_cli!("{} -> {:?}", proto.kind, route.targets);
 
-    #[cfg(feature = "java")]
-    tcp.insert(
-        "minecraftjava".to_string(),
-        vec!["127.0.0.1:25566".to_string()],
-    );
+        tcp.insert(proto.id.to_string(), route.targets.clone());
+        udp.insert(proto.id.to_string(), route.targets.clone());
+    }
 
-    #[cfg(feature = "web")]
-    tcp.insert("http".to_string(), vec!["127.0.0.1:3000".to_string()]);
-
-    #[cfg(feature = "bedrock")]
-    udp.insert(
-        "minecraftbedrock".to_string(),
-        vec!["127.0.0.1:25566".to_string()],
-    );
-
-    RouteConfig { tcp, udp }
+    Ok((tcp, udp))
 }
