@@ -24,6 +24,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4.5", features = ["derive"], optional = true }
 indicatif = { version = "0.18", optional = true }
+owo-colors = { version = "4", optional = true }
 
 [features]
 default = ["cli", "java", "fake-motd", "wait-list", "pretty-cli"]
@@ -42,7 +43,7 @@ wait-list = []
 
 # UI/UX Features
 cli = ["dep:clap"]
-pretty-cli = ["cli", "dep:indicatif"]
+pretty-cli = ["cli", "dep:indicatif", "dep:owo-colors"]
 
 [[bin]]
 name = "enderpearl"
