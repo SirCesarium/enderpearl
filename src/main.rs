@@ -2,14 +2,13 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::absolute_paths)]
 #![allow(missing_docs, clippy::missing_errors_doc)]
 
-mod errors;
-mod hooks;
-mod protocols;
-mod router;
-
-use crate::router::EnderRouter;
 use anyhow::Context;
+use enderpearl::EnderRouter;
 use std::net::SocketAddr;
+
+use crate::display::EnderDisplay;
+
+mod display;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -17,12 +16,16 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .context("Failed to parse listener address")?;
 
+    EnderDisplay::print_banner();
+    EnderDisplay::print_listen(&addr);
+    EnderDisplay::print_features();
+
     let router = EnderRouter::new();
 
     router
         .serve(addr)
         .await
-        .context("Enderpearl router stopped unexpectedly")?;
+        .context("Enderpearl core engine execution failed")?;
 
     Ok(())
 }
