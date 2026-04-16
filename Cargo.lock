@@ -608,13 +608,14 @@ dependencies = [
 
 [[package]]
 name = "refractium"
-version = "2.0.1"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89cc5ab20b483a309c2f92ed10ecb6dddd29ad893be682738cd1ae7460f25401"
+checksum = "146ff65bfe12d1f39bb4e3f2107851663e6fdb9bf9d3f47f159dbd732b819e5a"
 dependencies = [
  "bytes",
  "dashmap",
  "dyn-clone",
+ "heck",
  "memchr",
  "rand",
  "serde",
