@@ -1,8 +1,18 @@
 #![allow(dead_code)]
 
 use enderpearl::core::types::{EnderConfig, EnderRoute};
+use enderpearl::errors::{EnderError, Result};
+use enderpearl::fail_config;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
+
+#[cfg(feature = "bedrock")]
+use enderpearl::protocols::bedrock::MinecraftBedrock;
+#[cfg(feature = "java")]
+use enderpearl::protocols::java::MinecraftJava;
+#[cfg(feature = "web")]
+use enderpearl::protocols::web::HookedHttp;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TomlConfig {
@@ -53,8 +63,10 @@ const fn default_hot_reload() -> bool {
     true
 }
 
-impl From<TomlConfig> for EnderConfig {
-    fn from(toml: TomlConfig) -> Self {
+impl TryFrom<TomlConfig> for EnderConfig {
+    type Error = EnderError;
+
+    fn try_from(toml: TomlConfig) -> Result<Self> {
         let upstreams = toml
             .upstream
             .into_iter()
@@ -63,28 +75,63 @@ impl From<TomlConfig> for EnderConfig {
                     TomlTarget::Address(s) => vec![s],
                     TomlTarget::Pool(v) => v,
                 };
-                (
-                    name,
-                    EnderRoute {
-                        targets,
-                        labels: route.labels.unwrap_or_default(),
-                        wake_command: route.wake_command,
-                    },
-                )
-            })
-            .collect();
 
-        Self {
+                let protocol: Arc<dyn refractium::RefractiumProtocol> = match name.as_str() {
+                    // Java
+                    #[cfg(feature = "java")]
+                    "minecraft_java" | "java" | "mcj" => Arc::new(MinecraftJava),
+                    #[cfg(not(feature = "java"))]
+                    "minecraft_java" | "java" | "mcj" => {
+                        return fail_config!(name, "feature 'java' is disabled");
+                    }
+
+                    // Bedrock
+                    #[cfg(feature = "bedrock")]
+                    "minecraft_bedrock" | "bedrock" | "mcb" => Arc::new(MinecraftBedrock),
+                    #[cfg(not(feature = "bedrock"))]
+                    "minecraft_bedrock" | "bedrock" | "mcb" => {
+                        return fail_config!(
+                            name,
+                            format!("feature '{}' is disabled", "bedrock".bright_red().bold())
+                        );
+                    }
+
+                    // Web
+                    #[cfg(feature = "web")]
+                    "http" | "web" => Arc::new(HookedHttp::new()),
+                    #[cfg(not(feature = "web"))]
+                    "http" | "web" => {
+                        return fail_config!(
+                            name,
+                            format!("feature '{}' is disabled", "web".bright_red().bold())
+                        );
+                    }
+
+                    // Default
+                    _ => return fail_config!(name, "unknown protocol".to_string()),
+                };
+
+                Ok(EnderRoute {
+                    protocol,
+                    targets,
+                    labels: route.labels.unwrap_or_default(),
+                    wake_command: route.wake_command,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self {
             bind: toml.server.bind,
             port: toml.server.port,
             hot_reload: toml.server.hot_reload,
             peek_buffer_size: toml.server.peek_buffer_size,
             peek_timeout_ms: toml.server.peek_timeout_ms,
             upstreams,
-        }
+        })
     }
 }
 
+#[must_use]
 pub fn example_config() -> String {
     r#"
 [server]

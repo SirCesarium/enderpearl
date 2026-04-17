@@ -18,8 +18,8 @@ pub enum EnderError {
     #[error("No backend available for protocol: {0}")]
     NoBackend(String),
 
-    #[error("Configuration error: {0}")]
-    Config(String),
+    #[error("Configuration error ({0}): {1}")]
+    Config(String, String),
 
     #[error("Auto-wakeup failed for {0}: {1}")]
     WakeupFailure(String, String),

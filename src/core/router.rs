@@ -1,6 +1,8 @@
-use crate::core::{registry, routes, types::EnderConfig};
+use crate::EnderError;
+use crate::core::{routes, types::EnderConfig};
 use crate::errors::Result;
 use refractium::Refractium;
+use std::convert;
 use std::net::SocketAddr;
 
 pub struct EnderRouter {
@@ -9,21 +11,18 @@ pub struct EnderRouter {
 
 impl EnderRouter {
     pub fn new(config: &EnderConfig) -> Result<Self> {
-        let (tcp_registry, udp_registry) = registry::create_registries();
         let (tcp_routes, udp_routes) = routes::map_to_refractium(config)?;
 
         let inner = Refractium::builder()
-            .registries(tcp_registry, udp_registry)
             .routes(tcp_routes, udp_routes)
-            .build();
+            .peek_config(config.peek_buffer_size, config.peek_timeout_ms)
+            .build()
+            .map_err(EnderError::Refractium)?;
 
         Ok(Self { inner })
     }
 
     pub async fn serve(self, addr: SocketAddr) -> Result<()> {
-        let t = self.inner.run_tcp(addr);
-        let u = self.inner.run_udp(addr);
-        tokio::try_join!(t, u)?;
-        Ok(())
+        self.inner.run_both(addr).await.map_err(convert::Into::into)
     }
 }

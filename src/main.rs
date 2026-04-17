@@ -53,7 +53,7 @@ async fn run() -> anyhow::Result<()> {
     let toml_config: config::TomlConfig =
         toml::from_str(&config_str).context("The configuration file has invalid TOML syntax")?;
 
-    let config = EnderConfig::from(toml_config);
+    let config = EnderConfig::try_from(toml_config)?;
 
     let addr: SocketAddr = format!("{}:{}", config.bind, config.port)
         .parse()

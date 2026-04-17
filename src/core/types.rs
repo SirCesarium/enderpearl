@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::sync::Arc;
+
+use refractium::RefractiumProtocol;
 
 pub struct EnderConfig {
     pub bind: String,
@@ -6,10 +8,11 @@ pub struct EnderConfig {
     pub hot_reload: bool,
     pub peek_buffer_size: usize,
     pub peek_timeout_ms: u64,
-    pub upstreams: HashMap<String, EnderRoute>,
+    pub upstreams: Vec<EnderRoute>,
 }
 
 pub struct EnderRoute {
+    pub protocol: Arc<dyn RefractiumProtocol>,
     pub targets: Vec<String>,
     pub labels: Vec<String>,
     pub wake_command: Option<String>,
@@ -23,7 +26,7 @@ impl Default for EnderConfig {
             hot_reload: true,
             peek_buffer_size: 1024,
             peek_timeout_ms: 3000,
-            upstreams: HashMap::new(),
+            upstreams: Vec::new(),
         }
     }
 }

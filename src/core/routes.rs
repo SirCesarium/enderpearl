@@ -1,34 +1,28 @@
 use crate::core::types::EnderConfig;
-use crate::errors::{EnderError, Result};
-use crate::print_cli;
+use crate::errors::Result;
 use crate::protocols::PROTOCOLS;
-use std::collections::HashMap;
+use crate::{fail_config, print_cli};
+use refractium::Transport;
+use refractium::types::{ForwardTarget, ProtocolRoute};
 
-pub type RefractiumRoutes = HashMap<String, Vec<String>>;
+pub fn map_to_refractium(config: &EnderConfig) -> Result<(Vec<ProtocolRoute>, Vec<ProtocolRoute>)> {
+    let mut tcp_routes = Vec::new();
+    let mut udp_routes = Vec::new();
 
-pub fn map_to_refractium(config: &EnderConfig) -> Result<(RefractiumRoutes, RefractiumRoutes)> {
-    let mut tcp = HashMap::new();
-    let mut udp = HashMap::new();
+    for route in &config.upstreams {
+        let proto_name = route.protocol.name();
 
-    for (name, route) in &config.upstreams {
-        let proto = PROTOCOLS
+        let proto_meta = PROTOCOLS
             .iter()
-            .find(|p| p.id == name || p.aliases.contains(&name.as_str()))
-            .ok_or_else(|| {
-                #[cfg(feature = "pretty-cli")]
-                {
-                    use owo_colors::OwoColorize;
-                    EnderError::Config(format!("Unknown protocol: {}", name.bold().bright_red()))
-                }
-                #[cfg(not(feature = "pretty-cli"))]
-                EnderError::Config(format!("Unknown protocol: {name}"))
-            })?;
+            .find(|p| p.id == proto_name || p.aliases.contains(&proto_name.as_str()))
+            .ok_or(())
+            .or_else(|()| fail_config!(proto_name, "protocol metadata not found".into()))?;
 
-        if !proto.is_enabled {
-            return Err(EnderError::Config(format!(
-                "Upstream '{}' requires '{}' feature but it is disabled",
-                name, proto.feature
-            )));
+        if !proto_meta.is_enabled {
+            return fail_config!(
+                proto_name,
+                format!("requires '{}' feature", proto_meta.feature)
+            );
         }
 
         #[cfg(feature = "pretty-cli")]
@@ -36,16 +30,34 @@ pub fn map_to_refractium(config: &EnderConfig) -> Result<(RefractiumRoutes, Refr
             use owo_colors::OwoColorize;
             print_cli!(
                 "{} -> {}",
-                proto.kind.to_string().bright_cyan(),
+                proto_meta.kind.to_string().bright_cyan(),
                 route.targets.join(", ").underline()
             );
         }
         #[cfg(not(feature = "pretty-cli"))]
-        print_cli!("{} -> {:?}", proto.kind, route.targets);
+        print_cli!("{} -> {:?}", proto_meta.kind, route.targets);
 
-        tcp.insert(proto.id.to_string(), route.targets.clone());
-        udp.insert(proto.id.to_string(), route.targets.clone());
+        let target = if route.targets.len() == 1 {
+            ForwardTarget::Single(route.targets[0].clone())
+        } else {
+            ForwardTarget::Multiple(route.targets.clone())
+        };
+
+        let proto_route = ProtocolRoute {
+            protocol: route.protocol.clone(),
+            sni: None,
+            forward_to: target,
+        };
+
+        match route.protocol.transport() {
+            Transport::Tcp => tcp_routes.push(proto_route),
+            Transport::Udp => udp_routes.push(proto_route),
+            Transport::Both => {
+                tcp_routes.push(proto_route.clone());
+                udp_routes.push(proto_route);
+            }
+        }
     }
 
-    Ok((tcp, udp))
+    Ok((tcp_routes, udp_routes))
 }
