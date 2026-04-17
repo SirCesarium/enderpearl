@@ -14,7 +14,7 @@ readme = "README.md"
 anyhow = "1"
 dashmap = "6.1"
 futures = "0.3"
-refractium = { version = "3", default-features = false, features = [
+refractium = { version = "3.0.4", default-features = false, features = [
     "proto-http",
     "hooks",
     "logging",

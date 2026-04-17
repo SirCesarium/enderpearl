@@ -81,3 +81,24 @@ macro_rules! check_feature {
         }
     };
 }
+
+#[macro_export]
+macro_rules! fail_config {
+    ($name:expr, $reason:expr) => {{
+        #[cfg(feature = "pretty-cli")]
+        {
+            use owo_colors::OwoColorize;
+            Err($crate::errors::EnderError::Config(
+                format!("in upstream {}", $name.bold().bright_red()),
+                $reason,
+            ))
+        }
+        #[cfg(not(feature = "pretty-cli"))]
+        {
+            Err($crate::errors::EnderError::Config(
+                format!("in upstream '{}'", $name),
+                $reason,
+            ))
+        }
+    }};
+}
