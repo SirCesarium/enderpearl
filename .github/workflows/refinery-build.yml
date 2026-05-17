@@ -64,7 +64,7 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Setup Linker
-        uses: MechanicalLabs/refinery/setup-linker@main
+        uses: MechanicalLabs/refinery/setup-linker@v0
         with:
           target-triple: ${{ matrix.target_triple }}
           extra-apt-packages: ${{ join(matrix.apt_packages, ' ') }}
@@ -117,7 +117,7 @@ jobs:
         shell: bash
       - name: Install cargo-deb
         if: ${{ matrix.has_deb }}
-        uses: MechanicalLabs/refinery/install-packager@main
+        uses: MechanicalLabs/refinery/install-packager@v0
         with:
           tool: cargo-deb
       - name: Build .deb package
@@ -131,7 +131,7 @@ jobs:
         shell: bash
       - name: Install cargo-rpm
         if: ${{ matrix.has_rpm }}
-        uses: MechanicalLabs/refinery/install-packager@main
+        uses: MechanicalLabs/refinery/install-packager@v0
         with:
           tool: cargo-rpm
       - name: Build .rpm package
@@ -145,7 +145,7 @@ jobs:
         shell: bash
       - name: Install cargo-wix
         if: ${{ matrix.has_msi }}
-        uses: MechanicalLabs/refinery/install-packager@main
+        uses: MechanicalLabs/refinery/install-packager@v0
         with:
           tool: cargo-wix
       - name: Build .msi package
