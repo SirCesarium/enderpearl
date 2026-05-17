@@ -1,0 +1,32 @@
+version = 1
+platform = "github"
+lang = "rust"
+
+[[artifacts]]
+type = "bin"
+name = "enderpearl"
+outputName = "{name}-{os}"
+
+[[targets]]
+id = "linux"
+for = "enderpearl"
+os = "linux"
+arch = [ "x86_64" ]
+abi = "musl"
+packages = [ "bin" ]
+type = "bin"
+
+[[targets]]
+id = "windows"
+for = "enderpearl"
+os = "windows"
+arch = [ "x86_64" ]
+abi = "msvc"
+packages = [ "bin" ]
+type = "bin"
+
+[release]
+strip = true
+lto = true
+codegenUnits = 1
+panic = "abort"
