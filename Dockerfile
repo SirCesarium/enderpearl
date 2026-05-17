@@ -3,7 +3,7 @@ WORKDIR /app
 COPY . .
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-trixie
 WORKDIR /app
 COPY --from=builder /app/target/release/mcg .
 ENTRYPOINT ["./mcg"]
