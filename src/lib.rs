@@ -5,6 +5,7 @@
 pub mod core;
 pub mod errors;
 pub mod hooks;
+pub mod minecraft;
 pub mod protocols;
 
 pub(crate) mod macros;
