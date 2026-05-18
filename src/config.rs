@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use enderpearl::core::types::{EnderConfig, EnderRoute};
 use enderpearl::errors::{EnderError, Result};
 use enderpearl::fail_config;
@@ -15,12 +13,14 @@ use enderpearl::protocols::java::MinecraftJava;
 use enderpearl::protocols::web::HookedHttp;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct TomlConfig {
     pub server: ServerConfig,
     pub upstream: HashMap<String, TomlRoute>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     #[serde(default = "default_bind")]
     pub bind: String,
@@ -34,10 +34,12 @@ pub struct ServerConfig {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct TomlRoute {
     pub forward_to: TomlTarget,
     pub labels: Option<Vec<String>>,
     pub wake_command: Option<String>,
+    pub fake_motd: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -114,8 +116,8 @@ impl TryFrom<TomlConfig> for EnderConfig {
                 Ok(EnderRoute {
                     protocol,
                     targets,
-                    labels: route.labels.unwrap_or_default(),
                     wake_command: route.wake_command,
+                    fake_motd: route.fake_motd,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -127,23 +129,7 @@ impl TryFrom<TomlConfig> for EnderConfig {
             peek_buffer_size: toml.server.peek_buffer_size,
             peek_timeout_ms: toml.server.peek_timeout_ms,
             upstreams,
+            java_proxy_port: None,
         })
     }
-}
-
-#[must_use]
-pub fn example_config() -> String {
-    r#"
-[server]
-port = 25565
-
-[upstream.minecraft_java]
-forward_to = "127.0.0.1:25566"
-labels = ["survival"]
-wake_command = "docker start mc_server"
-
-[upstream.web_static]
-forward_to = "127.0.0.1:8080"
-"#
-    .to_string()
 }
