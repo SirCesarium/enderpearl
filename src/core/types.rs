@@ -9,13 +9,14 @@ pub struct EnderConfig {
     pub peek_buffer_size: usize,
     pub peek_timeout_ms: u64,
     pub upstreams: Vec<EnderRoute>,
+    pub java_proxy_port: Option<u16>,
 }
 
 pub struct EnderRoute {
     pub protocol: Arc<dyn RefractiumProtocol>,
     pub targets: Vec<String>,
-    pub labels: Vec<String>,
     pub wake_command: Option<String>,
+    pub fake_motd: Option<String>,
 }
 
 impl Default for EnderConfig {
@@ -27,6 +28,7 @@ impl Default for EnderConfig {
             peek_buffer_size: 1024,
             peek_timeout_ms: 3000,
             upstreams: Vec::new(),
+            java_proxy_port: None,
         }
     }
 }

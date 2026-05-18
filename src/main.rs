@@ -4,11 +4,17 @@
 
 use crate::display::EnderDisplay;
 use anyhow::Context;
+use clap::CommandFactory;
+use clap::Parser;
 use enderpearl::core::router::EnderRouter;
 use enderpearl::core::types::EnderConfig;
+use enderpearl::minecraft;
+use enderpearl::protocols::{ProtocolKind, PROTOCOLS};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::{fs, process};
 
+mod cli;
 mod config;
 mod display;
 
@@ -45,15 +51,51 @@ async fn run() -> anyhow::Result<()> {
             .init();
     }
 
-    let config_path = "enderpearl.toml";
+    let cli = cli::Cli::parse();
 
-    let config_str =
-        fs::read_to_string(config_path).context("Could not find or read 'enderpearl.toml'")?;
+    match cli.command {
+        Some(cli::Commands::Init) => {
+            cli::handle_init(&cli.config)?;
+            return Ok(());
+        }
+        Some(cli::Commands::Run) | None => {}
+    }
+
+    let Ok(config_str) = fs::read_to_string(&cli.config) else {
+        if cli.command.is_none() {
+            cli::Cli::command().print_help()?;
+            eprintln!();
+        } else {
+            eprintln!("No config file found at '{}'", cli.config.display());
+            eprintln!("Run `enderpearl init` to create one.");
+        }
+        return Ok(());
+    };
 
     let toml_config: config::TomlConfig =
         toml::from_str(&config_str).context("The configuration file has invalid TOML syntax")?;
 
-    let config = EnderConfig::try_from(toml_config)?;
+    let mut config = EnderConfig::try_from(toml_config)?;
+
+    if let Some(route) = config
+        .upstreams
+        .iter()
+        .find(|r| {
+            let name = r.protocol.name();
+            let is_java = PROTOCOLS.iter().any(|p| {
+                matches!(p.kind, ProtocolKind::Java)
+                    && (p.id == name || p.aliases.contains(&name.as_str()))
+            });
+            is_java && (r.fake_motd.is_some() || r.wake_command.is_some())
+        })
+    {
+        let proxy = Arc::new(minecraft::java::JavaProxy {
+            targets: route.targets.clone(),
+            wake_command: route.wake_command.clone(),
+            fake_motd: route.fake_motd.clone(),
+        });
+        config.java_proxy_port = Some(proxy.serve().await?);
+    }
 
     let addr: SocketAddr = format!("{}:{}", config.bind, config.port)
         .parse()

@@ -1,9 +1,11 @@
 use crate::core::types::EnderConfig;
-use crate::errors::Result;
+use crate::errors::{EnderError, Result};
 use crate::protocols::PROTOCOLS;
 use crate::{fail_config, print_cli};
 use refractium::Transport;
 use refractium::types::{ForwardTarget, ProtocolRoute};
+
+use crate::protocols::ProtocolKind;
 
 pub fn map_to_refractium(config: &EnderConfig) -> Result<(Vec<ProtocolRoute>, Vec<ProtocolRoute>)> {
     let mut tcp_routes = Vec::new();
@@ -37,7 +39,15 @@ pub fn map_to_refractium(config: &EnderConfig) -> Result<(Vec<ProtocolRoute>, Ve
         #[cfg(not(feature = "pretty-cli"))]
         print_cli!("{} -> {:?}", proto_meta.kind, route.targets);
 
-        let target = if route.targets.len() == 1 {
+        let has_features = route.fake_motd.is_some() || route.wake_command.is_some();
+        let is_java = matches!(proto_meta.kind, ProtocolKind::Java);
+
+        let target = if is_java && has_features {
+            let port = config
+                .java_proxy_port
+                .ok_or_else(|| EnderError::Config("Java proxy".into(), "proxy port not assigned".into()))?;
+            ForwardTarget::Single(format!("127.0.0.1:{port}"))
+        } else if route.targets.len() == 1 {
             ForwardTarget::Single(route.targets[0].clone())
         } else {
             ForwardTarget::Multiple(route.targets.clone())
