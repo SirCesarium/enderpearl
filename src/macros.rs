@@ -18,7 +18,7 @@ macro_rules! info {
         #[cfg(all(not(feature = "logging"), feature = "pretty-cli"))]
         {
             use owo_colors::OwoColorize;
-            println!("{} {}", "!".bright_blue().bold(), format!($($arg)*));
+            println!(" {} {}", " ◆".bright_green(), format!($($arg)*).bright_magenta());
         }
     };
 }
@@ -33,7 +33,7 @@ macro_rules! warn {
         #[cfg(all(not(feature = "logging"), feature = "pretty-cli"))]
         {
             use owo_colors::OwoColorize;
-            println!("{} {}", "[!]".bright_yellow().bold(), format!($($arg)*).bright_yellow());
+            println!(" {} {}", " ◆".bright_yellow(), format!($($arg)*).bright_yellow());
         }
     };
 }
@@ -48,7 +48,7 @@ macro_rules! error {
         #[cfg(all(not(feature = "logging"), feature = "pretty-cli"))]
         {
             use owo_colors::OwoColorize;
-            eprintln!("{} {}", "X".bright_red().bold(), format!($($arg)*).bright_red().bold());
+            eprintln!(" {} {}", "X".bright_red().bold(), format!($($arg)*).bright_red().bold());
         }
     };
 }
@@ -63,7 +63,7 @@ macro_rules! trace {
         #[cfg(all(not(feature = "logging"), feature = "pretty-cli"))]
         {
             use owo_colors::OwoColorize;
-            println!("{} {}", ">>".dimmed(), format!($($arg)*).dimmed());
+            println!(" {} {}", " ◆".bright_magenta().dimmed(), format!($($arg)*).bright_magenta().dimmed());
         }
     };
 }
