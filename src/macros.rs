@@ -24,21 +24,6 @@ macro_rules! info {
 }
 
 #[macro_export]
-macro_rules! warn {
-    ($($arg:tt)*) => {
-        #[cfg(feature = "logging")]
-        {
-            tracing::warn!($($arg)*);
-        }
-        #[cfg(all(not(feature = "logging"), feature = "pretty-cli"))]
-        {
-            use owo_colors::OwoColorize;
-            println!(" {} {}", " ◆".bright_yellow(), format!($($arg)*).bright_yellow());
-        }
-    };
-}
-
-#[macro_export]
 macro_rules! error {
     ($($arg:tt)*) => {
         #[cfg(feature = "logging")]
@@ -49,21 +34,6 @@ macro_rules! error {
         {
             use owo_colors::OwoColorize;
             eprintln!(" {} {}", "X".bright_red().bold(), format!($($arg)*).bright_red().bold());
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! trace {
-    ($($arg:tt)*) => {
-        #[cfg(feature = "logging")]
-        {
-            tracing::trace!($($arg)*);
-        }
-        #[cfg(all(not(feature = "logging"), feature = "pretty-cli"))]
-        {
-            use owo_colors::OwoColorize;
-            println!(" {} {}", " ◆".bright_magenta().dimmed(), format!($($arg)*).bright_magenta().dimmed());
         }
     };
 }

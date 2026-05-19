@@ -1,16 +1,8 @@
 use crate::core::types::{EnderConfig, EnderRoute};
 use crate::errors::{EnderError, Result};
-use crate::fail_config;
+use crate::protocols::ProtocolMeta;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
-
-#[cfg(feature = "bedrock")]
-use crate::protocols::bedrock::MinecraftBedrock;
-#[cfg(feature = "java")]
-use crate::protocols::java::MinecraftJava;
-#[cfg(feature = "web")]
-use crate::protocols::web::HookedHttp;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -35,7 +27,6 @@ pub struct ServerConfig {
 #[serde(deny_unknown_fields)]
 pub struct TomlRoute {
     pub forward_to: TomlTarget,
-    pub labels: Option<Vec<String>>,
     pub wake_command: Option<String>,
     pub fake_motd: Option<String>,
 }
@@ -72,40 +63,13 @@ impl TryFrom<TomlConfig> for EnderConfig {
                     TomlTarget::Pool(v) => v,
                 };
 
-                let protocol: Arc<dyn refractium::RefractiumProtocol> = match name.as_str() {
-                    // Java
-                    #[cfg(feature = "java")]
-                    "minecraft_java" | "java" | "mcj" => Arc::new(MinecraftJava),
-                    #[cfg(not(feature = "java"))]
-                    "minecraft_java" | "java" | "mcj" => {
-                        return fail_config!(name, "feature 'java' is disabled");
-                    }
+                let meta = ProtocolMeta::lookup(&name).ok_or_else(|| {
+                    EnderError::Config(name.clone(), "unknown protocol".to_string())
+                })?;
 
-                    // Bedrock
-                    #[cfg(feature = "bedrock")]
-                    "minecraft_bedrock" | "bedrock" | "mcb" => Arc::new(MinecraftBedrock),
-                    #[cfg(not(feature = "bedrock"))]
-                    "minecraft_bedrock" | "bedrock" | "mcb" => {
-                        return fail_config!(
-                            name,
-                            format!("feature '{}' is disabled", "bedrock".bright_red().bold())
-                        );
-                    }
-
-                    // Web
-                    #[cfg(feature = "web")]
-                    "http" | "web" => Arc::new(HookedHttp::new()),
-                    #[cfg(not(feature = "web"))]
-                    "http" | "web" => {
-                        return fail_config!(
-                            name,
-                            format!("feature '{}' is disabled", "web".bright_red().bold())
-                        );
-                    }
-
-                    // Default
-                    _ => return fail_config!(name, "unknown protocol".to_string()),
-                };
+                let protocol = meta.kind.instantiate().ok_or_else(|| {
+                    EnderError::Config(name.clone(), format!("requires '{}' feature", meta.feature))
+                })?;
 
                 Ok(EnderRoute {
                     protocol,

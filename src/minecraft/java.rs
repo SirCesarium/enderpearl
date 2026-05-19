@@ -1,12 +1,12 @@
 use crate::error;
-use crate::minecraft::varint::{decode_string, decode_varint, encode_varint, read_varint};
-use anyhow::{Context, Result};
+use crate::errors::{EnderError, Result};
+use crate::minecraft::varint::{decode_string, decode_varint, encode_mc_packet, encode_varint, read_varint};
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
-use std::net::Ipv4Addr;
 
 const DEFAULT_MOTD: &str = r#"{"version":{"name":"1.21","protocol":766},"players":{"max":0,"online":0},"description":{"text":"§cServer offline — starting up..."}}"#;
 
@@ -57,7 +57,7 @@ impl JavaProxy {
         let any_online = self.check_any_online().await;
 
         if any_online {
-            if let Err(e) = proxy_bidirectional(&mut stream, &self.targets).await {
+            if let Err(e) = proxy_to_backend(&mut stream, &self.targets, None).await {
                 error!("Java proxy backend: {e:#}");
             }
             return;
@@ -74,7 +74,7 @@ impl JavaProxy {
         let result = match handshake.next_state {
             1 => self.handle_status(&mut stream, &handshake).await,
             2 => self.handle_login(&mut stream, &handshake).await,
-            _ => skip_to_backend(&mut stream, &raw_packet, &self.targets).await,
+            _ => proxy_to_backend(&mut stream, &self.targets, Some(&raw_packet)).await,
         };
 
         if let Err(e) = result {
@@ -87,7 +87,7 @@ impl JavaProxy {
             if timeout(Duration::from_millis(500), TcpStream::connect(target))
                 .await
                 .ok()
-                .and_then(Result::ok)
+                .and_then(std::result::Result::ok)
                 .is_some()
             {
                 return true;
@@ -113,22 +113,18 @@ impl JavaProxy {
             execute_wake(cmd)?;
         }
 
-        skip_to_backend(stream, &handshake.raw, &self.targets).await
+        proxy_to_backend(stream, &self.targets, Some(&handshake.raw)).await
     }
 }
 
 async fn read_raw_packet(stream: &mut TcpStream) -> Result<Vec<u8>> {
     let raw_length = read_varint(stream).await?;
     let length = usize::try_from(raw_length)
-        .context("Negative packet length")?;
+        .map_err(|_| EnderError::PacketParse("Negative packet length".into()))?;
     let mut data = vec![0u8; length];
-    stream.read_exact(&mut data).await?;
+    stream.read_exact(&mut data).await.map_err(EnderError::Io)?;
 
-    let packet_length = i32::try_from(length)
-        .context("Packet too large")?;
-    let mut packet = encode_varint(packet_length);
-    packet.extend_from_slice(&data);
-    Ok(packet)
+    encode_mc_packet(&data)
 }
 
 fn parse_handshake(raw: &[u8]) -> Result<Handshake> {
@@ -136,7 +132,9 @@ fn parse_handshake(raw: &[u8]) -> Result<Handshake> {
     let _length = decode_varint(raw, &mut offset)?;
     let packet_id = decode_varint(raw, &mut offset)?;
     if packet_id != 0x00 {
-        anyhow::bail!("Expected handshake packet (ID 0x00), got 0x{packet_id:02X}");
+        return Err(EnderError::PacketParse(format!(
+            "Expected handshake packet (ID 0x00), got 0x{packet_id:02X}"
+        )));
     }
     let proto_ver = decode_varint(raw, &mut offset)?;
     let addr = decode_string(raw, &mut offset)?;
@@ -149,18 +147,11 @@ fn parse_handshake(raw: &[u8]) -> Result<Handshake> {
 
 async fn write_status_response(stream: &mut TcpStream, motd: &str) -> Result<()> {
     let json_bytes = motd.as_bytes();
-    let json_len = i32::try_from(json_bytes.len())
-        .context("MOTD response too large")?;
     let mut payload = encode_varint(0x00);
-    payload.extend_from_slice(&encode_varint(json_len));
-    payload.extend_from_slice(json_bytes);
+    payload.extend_from_slice(&encode_mc_packet(json_bytes)?);
 
-    let payload_len = i32::try_from(payload.len())
-        .context("Packet payload too large")?;
-    let mut packet = encode_varint(payload_len);
-    packet.extend_from_slice(&payload);
-
-    stream.write_all(&packet).await?;
+    let packet = encode_mc_packet(&payload)?;
+    stream.write_all(&packet).await.map_err(EnderError::Io)?;
     Ok(())
 }
 
@@ -170,25 +161,24 @@ fn execute_wake(cmd: &str) -> Result<()> {
         Command::new(program)
             .args(&parts[1..])
             .spawn()
-            .context("Failed to execute wake command")?;
+            .map_err(|e| EnderError::WakeupFailure(program.to_string(), e.to_string()))?;
     }
     Ok(())
 }
 
-async fn skip_to_backend(stream: &mut TcpStream, handshake: &[u8], targets: &[String]) -> Result<()> {
-    let target = targets.first().ok_or_else(|| anyhow::anyhow!("No targets configured"))?;
+async fn proxy_to_backend(
+    stream: &mut TcpStream,
+    targets: &[String],
+    initial_data: Option<&[u8]>,
+) -> Result<()> {
+    let target = targets.first()
+        .ok_or_else(|| EnderError::NoBackend("No targets configured in Java route".into()))?;
     let mut backend = TcpStream::connect(target)
         .await
-        .with_context(|| format!("Failed to connect to backend {target}"))?;
-    backend.write_all(handshake).await?;
-    proxy_bidirectional_raw(stream, &mut backend).await
-}
-
-async fn proxy_bidirectional(stream: &mut TcpStream, targets: &[String]) -> Result<()> {
-    let target = targets.first().ok_or_else(|| anyhow::anyhow!("No targets configured"))?;
-    let mut backend = TcpStream::connect(target)
-        .await
-        .with_context(|| format!("Failed to connect to backend {target}"))?;
+        .map_err(|e| EnderError::Proxy(format!("Failed to connect to backend {target}: {e}")))?;
+    if let Some(data) = initial_data {
+        backend.write_all(data).await.map_err(EnderError::Io)?;
+    }
     proxy_bidirectional_raw(stream, &mut backend).await
 }
 
