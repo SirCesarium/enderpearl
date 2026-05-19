@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::errors::{EnderError, Result};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// Encodes an `i32` as a Minecraft `VarInt`.
@@ -33,7 +33,9 @@ pub fn decode_varint(data: &[u8], offset: &mut usize) -> Result<i32> {
     let mut position = 0;
     loop {
         if *offset >= data.len() {
-            anyhow::bail!("Unexpected end of data while decoding VarInt");
+            return Err(EnderError::PacketParse(
+                "Unexpected end of data while decoding VarInt".into(),
+            ));
         }
         let byte = data[*offset];
         *offset += 1;
@@ -43,7 +45,9 @@ pub fn decode_varint(data: &[u8], offset: &mut usize) -> Result<i32> {
         }
         position += 7;
         if position >= 32 {
-            anyhow::bail!("VarInt too large (exceeds 32 bits)");
+            return Err(EnderError::PacketParse(
+                "VarInt too large (exceeds 32 bits)".into(),
+            ));
         }
     }
 }
@@ -58,7 +62,7 @@ pub async fn read_varint<R: AsyncRead + Unpin>(reader: &mut R) -> Result<i32> {
     let mut position = 0;
     loop {
         let mut buf = [0u8; 1];
-        reader.read_exact(&mut buf).await?;
+        reader.read_exact(&mut buf).await.map_err(EnderError::Io)?;
         let byte = buf[0];
         result |= i32::from(byte & 0x7F) << position;
         if byte & 0x80 == 0 {
@@ -66,9 +70,24 @@ pub async fn read_varint<R: AsyncRead + Unpin>(reader: &mut R) -> Result<i32> {
         }
         position += 7;
         if position >= 32 {
-            anyhow::bail!("VarInt too large (exceeds 32 bits)");
+            return Err(EnderError::PacketParse(
+                "VarInt too large (exceeds 32 bits)".into(),
+            ));
         }
     }
+}
+
+/// Encodes a Minecraft packet from a payload: VarInt(length) + payload.
+///
+/// # Errors
+///
+/// Returns an error if the payload length exceeds `i32::MAX`.
+pub fn encode_mc_packet(payload: &[u8]) -> Result<Vec<u8>> {
+    let len = i32::try_from(payload.len())
+        .map_err(|_| EnderError::PacketParse("Minecraft packet payload exceeds i32::MAX".into()))?;
+    let mut packet = encode_varint(len);
+    packet.extend_from_slice(payload);
+    Ok(packet)
 }
 
 /// Decodes a length-prefixed UTF-8 string from a byte slice.
@@ -81,11 +100,12 @@ pub async fn read_varint<R: AsyncRead + Unpin>(reader: &mut R) -> Result<i32> {
 /// or the bytes are not valid UTF-8.
 pub fn decode_string(data: &[u8], offset: &mut usize) -> Result<String> {
     let len = usize::try_from(decode_varint(data, offset)?)
-        .context("Negative VarInt length for string")?;
+        .map_err(|_| EnderError::PacketParse("Negative VarInt length for string".into()))?;
     if *offset + len > data.len() {
-        anyhow::bail!("String length exceeds remaining data");
+        return Err(EnderError::PacketParse("String length exceeds remaining data".into()));
     }
-    let s = String::from_utf8(data[*offset..*offset + len].to_vec())?;
+    let s = String::from_utf8(data[*offset..*offset + len].to_vec())
+        .map_err(|e| EnderError::PacketParse(format!("Invalid UTF-8 in string: {e}")))?;
     *offset += len;
     Ok(s)
 }

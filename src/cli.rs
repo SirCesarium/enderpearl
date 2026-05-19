@@ -1,5 +1,6 @@
 use crate::config::TomlTarget;
 use crate::display::EnderDisplay;
+use crate::protocols::PROTOCOLS;
 use clap::{Parser, Subcommand};
 use inquire::validator::Validation;
 use owo_colors::OwoColorize;
@@ -64,7 +65,7 @@ pub fn handle_init(config_path: &Path) -> anyhow::Result<()> {
 
     let selections = MultiSelect::new(
         "Select protocols to configure:",
-        PROTOCOL_METAS.iter().map(|p| p.display_name).collect(),
+        PROTOCOLS.iter().map(|p| p.display_name).collect(),
     )
     .with_help_message("space to toggle, enter to confirm")
     .prompt()?;
@@ -130,7 +131,7 @@ fn collect_upstream_configs(
     for proto in selections {
         section_header(proto);
 
-        let meta = PROTOCOL_METAS
+        let meta = PROTOCOLS
             .iter()
             .find(|m| m.display_name == *proto)
             .ok_or_else(|| anyhow::anyhow!("unknown protocol '{proto}'"))?;
@@ -210,30 +211,6 @@ fn validate_address(s: &str) -> Result<Validation, Box<dyn Error + Send + Sync>>
     }
     Ok(Validation::Valid)
 }
-
-struct ProtocolMeta {
-    display_name: &'static str,
-    config_key: &'static str,
-    default_port: &'static str,
-}
-
-const PROTOCOL_METAS: &[ProtocolMeta] = &[
-    ProtocolMeta {
-        display_name: "Minecraft Java",
-        config_key: "minecraft_java",
-        default_port: "127.0.0.1:25566",
-    },
-    ProtocolMeta {
-        display_name: "Minecraft Bedrock",
-        config_key: "minecraft_bedrock",
-        default_port: "127.0.0.1:19132",
-    },
-    ProtocolMeta {
-        display_name: "Web/HTTP",
-        config_key: "web",
-        default_port: "127.0.0.1:8080",
-    },
-];
 
 // ── Prompt theme & rendering ──
 

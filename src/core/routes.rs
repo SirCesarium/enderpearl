@@ -1,11 +1,10 @@
 use crate::core::types::EnderConfig;
 use crate::errors::{EnderError, Result};
-use crate::protocols::PROTOCOLS;
+use crate::protocols::ProtocolKind;
+use crate::protocols::ProtocolMeta;
 use crate::{fail_config, print_cli};
 use refractium::types::{ForwardTarget, ProtocolRoute};
 use refractium::Transport;
-
-use crate::protocols::ProtocolKind;
 
 /// Translates `EnderConfig` upstreams into refractium TCP/UDP route lists.
 ///
@@ -23,11 +22,12 @@ pub fn map_to_refractium(config: &EnderConfig) -> Result<(Vec<ProtocolRoute>, Ve
     for route in &config.upstreams {
         let proto_name = route.protocol.name();
 
-        let proto_meta = PROTOCOLS
-            .iter()
-            .find(|p| p.id == proto_name || p.aliases.contains(&proto_name.as_str()))
-            .ok_or(())
-            .or_else(|()| fail_config!(proto_name, "protocol metadata not found".into()))?;
+        let proto_meta = ProtocolMeta::lookup(&proto_name).ok_or_else(|| {
+            EnderError::Config(
+                "protocol metadata".into(),
+                format!("'{proto_name}' not found"),
+            )
+        })?;
 
         if !proto_meta.is_enabled {
             return fail_config!(

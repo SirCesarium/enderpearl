@@ -20,7 +20,6 @@ impl EnderDisplay {
         crate::print_cli!("{}\n", BANNER.bright_magenta());
     }
 
-    #[allow(unused)]
     pub fn print_listen(addr: &SocketAddr) {
         #[cfg(feature = "pretty-cli")]
         crate::print_cli!(
