@@ -1,22 +1,15 @@
-#![deny(clippy::all)]
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::absolute_paths)]
-#![allow(missing_docs, clippy::missing_errors_doc)]
-
-use crate::display::EnderDisplay;
 use anyhow::Context;
-use clap::CommandFactory;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use enderpearl::cli::{Cli, Commands};
+use enderpearl::config::TomlConfig;
 use enderpearl::core::router::EnderRouter;
 use enderpearl::core::types::EnderConfig;
+use enderpearl::display::EnderDisplay;
 use enderpearl::minecraft;
 use enderpearl::protocols::{ProtocolKind, PROTOCOLS};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::{fs, process};
-
-mod cli;
-mod config;
-mod display;
 
 #[tokio::main]
 async fn main() {
@@ -51,19 +44,19 @@ async fn run() -> anyhow::Result<()> {
             .init();
     }
 
-    let cli = cli::Cli::parse();
+    let cli = Cli::parse();
 
     match cli.command {
-        Some(cli::Commands::Init) => {
-            cli::handle_init(&cli.config)?;
+        Some(Commands::Init) => {
+            enderpearl::cli::handle_init(&cli.config)?;
             return Ok(());
         }
-        Some(cli::Commands::Run) | None => {}
+        Some(Commands::Run) | None => {}
     }
 
     let Ok(config_str) = fs::read_to_string(&cli.config) else {
         if cli.command.is_none() {
-            cli::Cli::command().print_help()?;
+            Cli::command().print_help()?;
             eprintln!();
         } else {
             eprintln!("No config file found at '{}'", cli.config.display());
@@ -72,7 +65,7 @@ async fn run() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    let toml_config: config::TomlConfig =
+    let toml_config: TomlConfig =
         toml::from_str(&config_str).context("The configuration file has invalid TOML syntax")?;
 
     let mut config = EnderConfig::try_from(toml_config)?;

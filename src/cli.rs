@@ -1,5 +1,3 @@
-#![cfg(feature = "cli")]
-
 use crate::config::TomlTarget;
 use crate::display::EnderDisplay;
 use clap::{Parser, Subcommand};
@@ -37,6 +35,11 @@ pub enum Commands {
 
 use inquire::{Confirm, CustomType, MultiSelect, Text};
 
+/// Runs the interactive configuration wizard.
+///
+/// # Errors
+///
+/// Returns an error if user input cannot be collected or the config file cannot be written.
 pub fn handle_init(config_path: &Path) -> anyhow::Result<()> {
     set_prompt_theme();
 
@@ -130,7 +133,7 @@ fn collect_upstream_configs(
         let meta = PROTOCOL_METAS
             .iter()
             .find(|m| m.display_name == *proto)
-            .ok_or_else(|| anyhow::anyhow!("unknown protocol '{}'", proto))?;
+            .ok_or_else(|| anyhow::anyhow!("unknown protocol '{proto}'"))?;
 
         let target = Text::new("Forward to:")
             .with_default(meta.default_port)
@@ -179,6 +182,7 @@ fn collect_upstream_configs(
     Ok(upstreams)
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn validate_address(s: &str) -> Result<Validation, Box<dyn Error + Send + Sync>> {
     let s = s.trim();
     if s.is_empty() {

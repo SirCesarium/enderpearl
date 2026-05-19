@@ -5,7 +5,6 @@ use refractium::RefractiumProtocol;
 pub struct EnderConfig {
     pub bind: String,
     pub port: u16,
-    pub hot_reload: bool,
     pub peek_buffer_size: usize,
     pub peek_timeout_ms: u64,
     pub upstreams: Vec<EnderRoute>,
@@ -24,7 +23,6 @@ impl Default for EnderConfig {
         Self {
             bind: "0.0.0.0".to_string(),
             port: 25565,
-            hot_reload: true,
             peek_buffer_size: 1024,
             peek_timeout_ms: 3000,
             upstreams: Vec::new(),

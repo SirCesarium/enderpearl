@@ -6,6 +6,7 @@ use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
+use std::net::Ipv4Addr;
 
 const DEFAULT_MOTD: &str = r#"{"version":{"name":"1.21","protocol":766},"players":{"max":0,"online":0},"description":{"text":"§cServer offline — starting up..."}}"#;
 
@@ -24,8 +25,13 @@ pub struct JavaProxy {
 }
 
 impl JavaProxy {
+    /// Binds a TCP listener on `127.0.0.1:0` and spawns the accept loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the listener cannot be bound.
     pub async fn serve(self: Arc<Self>) -> Result<u16> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let port = listener.local_addr()?.port();
 
         tokio::spawn(async move {
@@ -34,11 +40,11 @@ impl JavaProxy {
                     Ok((stream, _)) => {
                         let proxy = self.clone();
                         tokio::spawn(async move {
-                            let _ = proxy.handle_connection(stream).await;
+                            let () = proxy.handle_connection(stream).await;
                         });
                     }
-                    Err(_e) => {
-                        error!("Java proxy accept error: {}", _e);
+                    Err(e) => {
+                        error!("Java proxy accept error: {e}");
                     }
                 }
             }
@@ -52,19 +58,17 @@ impl JavaProxy {
 
         if any_online {
             if let Err(e) = proxy_bidirectional(&mut stream, &self.targets).await {
-                error!("Java proxy backend: {:#}", e);
+                error!("Java proxy backend: {e:#}");
             }
             return;
         }
 
-        let raw_packet = match read_raw_packet(&mut stream).await {
-            Ok(pkt) => pkt,
-            Err(_) => return,
+        let Ok(raw_packet) = read_raw_packet(&mut stream).await else {
+            return;
         };
 
-        let handshake = match parse_handshake(&raw_packet) {
-            Ok(h) => h,
-            Err(_) => return,
+        let Ok(handshake) = parse_handshake(&raw_packet) else {
+            return;
         };
 
         let result = match handshake.next_state {
@@ -74,7 +78,7 @@ impl JavaProxy {
         };
 
         if let Err(e) = result {
-            error!("Java proxy: {:#}", e);
+            error!("Java proxy: {e:#}");
         }
     }
 
@@ -83,7 +87,7 @@ impl JavaProxy {
             if timeout(Duration::from_millis(500), TcpStream::connect(target))
                 .await
                 .ok()
-                .and_then(|r| r.ok())
+                .and_then(Result::ok)
                 .is_some()
             {
                 return true;
@@ -106,7 +110,7 @@ impl JavaProxy {
 
     async fn handle_login(self: &Arc<Self>, stream: &mut TcpStream, handshake: &Handshake) -> Result<()> {
         if let Some(ref cmd) = self.wake_command {
-            execute_wake(cmd).await?;
+            execute_wake(cmd)?;
         }
 
         skip_to_backend(stream, &handshake.raw, &self.targets).await
@@ -114,11 +118,15 @@ impl JavaProxy {
 }
 
 async fn read_raw_packet(stream: &mut TcpStream) -> Result<Vec<u8>> {
-    let length = read_varint(stream).await? as usize;
+    let raw_length = read_varint(stream).await?;
+    let length = usize::try_from(raw_length)
+        .context("Negative packet length")?;
     let mut data = vec![0u8; length];
     stream.read_exact(&mut data).await?;
 
-    let mut packet = encode_varint(length as i32);
+    let packet_length = i32::try_from(length)
+        .context("Packet too large")?;
+    let mut packet = encode_varint(packet_length);
     packet.extend_from_slice(&data);
     Ok(packet)
 }
@@ -141,18 +149,22 @@ fn parse_handshake(raw: &[u8]) -> Result<Handshake> {
 
 async fn write_status_response(stream: &mut TcpStream, motd: &str) -> Result<()> {
     let json_bytes = motd.as_bytes();
+    let json_len = i32::try_from(json_bytes.len())
+        .context("MOTD response too large")?;
     let mut payload = encode_varint(0x00);
-    payload.extend_from_slice(&encode_varint(json_bytes.len() as i32));
+    payload.extend_from_slice(&encode_varint(json_len));
     payload.extend_from_slice(json_bytes);
 
-    let mut packet = encode_varint(payload.len() as i32);
+    let payload_len = i32::try_from(payload.len())
+        .context("Packet payload too large")?;
+    let mut packet = encode_varint(payload_len);
     packet.extend_from_slice(&payload);
 
     stream.write_all(&packet).await?;
     Ok(())
 }
 
-async fn execute_wake(cmd: &str) -> Result<()> {
+fn execute_wake(cmd: &str) -> Result<()> {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if let Some(program) = parts.first() {
         Command::new(program)

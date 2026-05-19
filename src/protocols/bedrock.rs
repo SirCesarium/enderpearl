@@ -1,4 +1,4 @@
-use refractium::{Transport, define_protocol};
+use refractium::{define_protocol, Transport};
 
 const RAKNET_MAGIC: &[u8; 16] = b"\x00\xff\xff\x00\xfe\xfe\xfe\xfe\xfd\xfd\xfd\xfd\x12\x34\x56\x78";
 

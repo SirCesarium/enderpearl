@@ -1,16 +1,16 @@
-use enderpearl::core::types::{EnderConfig, EnderRoute};
-use enderpearl::errors::{EnderError, Result};
-use enderpearl::fail_config;
+use crate::core::types::{EnderConfig, EnderRoute};
+use crate::errors::{EnderError, Result};
+use crate::fail_config;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(feature = "bedrock")]
-use enderpearl::protocols::bedrock::MinecraftBedrock;
+use crate::protocols::bedrock::MinecraftBedrock;
 #[cfg(feature = "java")]
-use enderpearl::protocols::java::MinecraftJava;
+use crate::protocols::java::MinecraftJava;
 #[cfg(feature = "web")]
-use enderpearl::protocols::web::HookedHttp;
+use crate::protocols::web::HookedHttp;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -25,8 +25,6 @@ pub struct ServerConfig {
     #[serde(default = "default_bind")]
     pub bind: String,
     pub port: u16,
-    #[serde(default = "default_hot_reload")]
-    pub hot_reload: bool,
     #[serde(default = "default_peek_buffer")]
     pub peek_buffer_size: usize,
     #[serde(default = "default_peek_timeout")]
@@ -59,10 +57,6 @@ const fn default_peek_buffer() -> usize {
 
 const fn default_peek_timeout() -> u64 {
     3000
-}
-
-const fn default_hot_reload() -> bool {
-    true
 }
 
 impl TryFrom<TomlConfig> for EnderConfig {
@@ -125,7 +119,6 @@ impl TryFrom<TomlConfig> for EnderConfig {
         Ok(Self {
             bind: toml.server.bind,
             port: toml.server.port,
-            hot_reload: toml.server.hot_reload,
             peek_buffer_size: toml.server.peek_buffer_size,
             peek_timeout_ms: toml.server.peek_timeout_ms,
             upstreams,

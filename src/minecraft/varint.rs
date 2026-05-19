@@ -1,9 +1,15 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+/// Encodes an `i32` as a Minecraft `VarInt`.
+///
+/// The `VarInt` format uses 7 bits per byte, with the high bit set
+/// to indicate that more bytes follow.
+#[must_use]
 pub fn encode_varint(mut value: i32) -> Vec<u8> {
     let mut buf = Vec::with_capacity(5);
     loop {
+        #[allow(clippy::cast_sign_loss)]
         let mut byte = (value & 0x7F) as u8;
         value >>= 7;
         if value != 0 {
@@ -17,6 +23,11 @@ pub fn encode_varint(mut value: i32) -> Vec<u8> {
     buf
 }
 
+/// Decodes a Minecraft `VarInt` from a byte slice.
+///
+/// # Errors
+///
+/// Returns an error if the data is truncated or the `VarInt` exceeds 32 bits.
 pub fn decode_varint(data: &[u8], offset: &mut usize) -> Result<i32> {
     let mut result = 0i32;
     let mut position = 0;
@@ -26,7 +37,7 @@ pub fn decode_varint(data: &[u8], offset: &mut usize) -> Result<i32> {
         }
         let byte = data[*offset];
         *offset += 1;
-        result |= ((byte & 0x7F) as i32) << position;
+        result |= i32::from(byte & 0x7F) << position;
         if byte & 0x80 == 0 {
             return Ok(result);
         }
@@ -37,6 +48,11 @@ pub fn decode_varint(data: &[u8], offset: &mut usize) -> Result<i32> {
     }
 }
 
+/// Reads a Minecraft `VarInt` from an async reader.
+///
+/// # Errors
+///
+/// Returns an error on IO failure or if the `VarInt` exceeds 32 bits.
 pub async fn read_varint<R: AsyncRead + Unpin>(reader: &mut R) -> Result<i32> {
     let mut result = 0i32;
     let mut position = 0;
@@ -44,7 +60,7 @@ pub async fn read_varint<R: AsyncRead + Unpin>(reader: &mut R) -> Result<i32> {
         let mut buf = [0u8; 1];
         reader.read_exact(&mut buf).await?;
         let byte = buf[0];
-        result |= ((byte & 0x7F) as i32) << position;
+        result |= i32::from(byte & 0x7F) << position;
         if byte & 0x80 == 0 {
             return Ok(result);
         }
@@ -55,8 +71,17 @@ pub async fn read_varint<R: AsyncRead + Unpin>(reader: &mut R) -> Result<i32> {
     }
 }
 
+/// Decodes a length-prefixed UTF-8 string from a byte slice.
+///
+/// The length is encoded as a `VarInt` followed by that many UTF-8 bytes.
+///
+/// # Errors
+///
+/// Returns an error if the `VarInt` is negative, the string exceeds the data,
+/// or the bytes are not valid UTF-8.
 pub fn decode_string(data: &[u8], offset: &mut usize) -> Result<String> {
-    let len = decode_varint(data, offset)? as usize;
+    let len = usize::try_from(decode_varint(data, offset)?)
+        .context("Negative VarInt length for string")?;
     if *offset + len > data.len() {
         anyhow::bail!("String length exceeds remaining data");
     }

@@ -35,16 +35,12 @@ inquire = { version = "0.9", optional = true }
 default = ["full"]
 
 # Groups
-full = ["cli", "java", "bedrock", "fake-motd", "wait-list", "web", "pretty-cli", "logging"]
+full = ["cli", "java", "bedrock", "web", "pretty-cli", "logging"]
 
 # Protocol logic
 java = []
 bedrock = []
 web = []
-
-# Logic Features
-fake-motd = []
-wait-list = []
 
 # UI/UX Features
 cli = ["dep:clap", "dep:toml", "dep:inquire"]
@@ -55,6 +51,12 @@ logging = ["dep:tracing", "dep:tracing-subscriber"]
 name = "enderpearl"
 path = "src/main.rs"
 required-features = ["cli"]
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
 
 [profile.release]
 opt-level = 3
