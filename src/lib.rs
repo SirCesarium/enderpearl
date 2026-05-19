@@ -1,8 +1,8 @@
-#![deny(clippy::all)]
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::absolute_paths)]
-#![allow(missing_docs, clippy::missing_errors_doc)]
-
+#[cfg(feature = "cli")]
+pub mod cli;
+pub mod config;
 pub mod core;
+pub mod display;
 pub mod errors;
 pub mod hooks;
 pub mod minecraft;

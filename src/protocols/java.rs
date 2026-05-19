@@ -1,4 +1,4 @@
-use refractium::{Transport, define_protocol};
+use refractium::{define_protocol, Transport};
 
 define_protocol!(
     name: MinecraftJava,

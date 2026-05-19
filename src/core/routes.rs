@@ -2,11 +2,20 @@ use crate::core::types::EnderConfig;
 use crate::errors::{EnderError, Result};
 use crate::protocols::PROTOCOLS;
 use crate::{fail_config, print_cli};
-use refractium::Transport;
 use refractium::types::{ForwardTarget, ProtocolRoute};
+use refractium::Transport;
 
 use crate::protocols::ProtocolKind;
 
+/// Translates `EnderConfig` upstreams into refractium TCP/UDP route lists.
+///
+/// Routes with Java protocols that have `fake_motd` or `wake_command` are
+/// redirected to the local `JavaProxy` port instead of their original target.
+///
+/// # Errors
+///
+/// Returns an error if a protocol is unknown, disabled, or the Java proxy port
+/// is missing when required.
 pub fn map_to_refractium(config: &EnderConfig) -> Result<(Vec<ProtocolRoute>, Vec<ProtocolRoute>)> {
     let mut tcp_routes = Vec::new();
     let mut udp_routes = Vec::new();
@@ -43,9 +52,9 @@ pub fn map_to_refractium(config: &EnderConfig) -> Result<(Vec<ProtocolRoute>, Ve
         let is_java = matches!(proto_meta.kind, ProtocolKind::Java);
 
         let target = if is_java && has_features {
-            let port = config
-                .java_proxy_port
-                .ok_or_else(|| EnderError::Config("Java proxy".into(), "proxy port not assigned".into()))?;
+            let port = config.java_proxy_port.ok_or_else(|| {
+                EnderError::Config("Java proxy".into(), "proxy port not assigned".into())
+            })?;
             ForwardTarget::Single(format!("127.0.0.1:{port}"))
         } else if route.targets.len() == 1 {
             ForwardTarget::Single(route.targets[0].clone())

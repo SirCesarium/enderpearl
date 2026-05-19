@@ -17,13 +17,13 @@ const BANNER: &str = r"
 impl EnderDisplay {
     pub fn print_banner() {
         #[cfg(feature = "pretty-cli")]
-        enderpearl::print_cli!("{}\n", BANNER.bright_magenta());
+        crate::print_cli!("{}\n", BANNER.bright_magenta());
     }
 
     #[allow(unused)]
     pub fn print_listen(addr: &SocketAddr) {
         #[cfg(feature = "pretty-cli")]
-        enderpearl::print_cli!(
+        crate::print_cli!(
             " {} {} {}",
             " ◆".bright_green(),
             "listening on".bright_magenta(),
@@ -43,14 +43,10 @@ impl EnderDisplay {
         features.push("Bedrock");
         #[cfg(feature = "web")]
         features.push("Web");
-        #[cfg(feature = "fake-motd")]
-        features.push("Fake-MOTD");
-        #[cfg(feature = "wait-list")]
-        features.push("Wait-List");
 
         if !features.is_empty() {
             #[cfg(feature = "pretty-cli")]
-            enderpearl::print_cli!(
+            crate::print_cli!(
                 " {} {}",
                 " ■".bright_green(),
                 features.join(", ").bright_magenta()

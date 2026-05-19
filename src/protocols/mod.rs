@@ -5,15 +5,7 @@ pub mod bedrock;
 #[cfg(feature = "java")]
 pub mod java;
 #[cfg(feature = "web")]
-pub mod web {
-    use crate::hooks::packet_logger::PacketLogger;
-    use refractium::{Http, hook_protocol};
-    hook_protocol!(
-        wrapper: HookedHttp,
-        proto: Http,
-        hooks: [PacketLogger]
-    );
-}
+pub mod web;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ProtocolKind {

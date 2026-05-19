@@ -69,20 +69,6 @@ macro_rules! trace {
 }
 
 #[macro_export]
-macro_rules! check_feature {
-    ($feature:literal, $name:expr, $internal:expr) => {
-        if cfg!(feature = $feature) {
-            $internal.to_string()
-        } else {
-            return Err(EnderError::Config(format!(
-                "Upstream '{}' requires '{}' feature",
-                $name, $feature
-            )));
-        }
-    };
-}
-
-#[macro_export]
 macro_rules! fail_config {
     ($name:expr, $reason:expr) => {{
         #[cfg(feature = "pretty-cli")]
