@@ -87,6 +87,8 @@ async fn run() -> anyhow::Result<()> {
             startup_on: route.startup_on,
             offline_motd: route.offline_motd.clone(),
             offline_message: route.offline_message.clone(),
+            startup_webhook: route.startup_webhook.clone(),
+            shutdown_webhook: route.shutdown_webhook.clone(),
             debug: config.debug,
         });
         config.java_proxy_port = Some(proxy.serve().await?);
@@ -105,6 +107,12 @@ async fn run() -> anyhow::Result<()> {
     EnderDisplay::print_listen(&addr);
     EnderDisplay::print_features();
 
+    for route in config.upstreams.clone() {
+        if route.shutdown_cmd.is_some() {
+            spawn_shutdown_monitor(route);
+        }
+    }
+
     let router = EnderRouter::new(&config)
         .context("Router initialization failed (check if protocol features are enabled)")?;
 
@@ -115,3 +123,60 @@ async fn run() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+fn spawn_shutdown_monitor(route: enderpearl::core::types::EnderRoute) {
+    let target = route.targets[0].clone();
+    let cmd = route.shutdown_cmd.unwrap();
+    let timeout_secs = route.shutdown_timeout_secs;
+    let interval_secs = route.check_interval_secs;
+    let min_players = route.min_players;
+    let shutdown_webhook = route.shutdown_webhook;
+
+    tokio::spawn(async move {
+        let mut empty_since: Option<tokio::time::Instant> = None;
+
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
+
+            match crate::minecraft::java::get_player_count(&target).await {
+                Ok(count) if count <= min_players => {
+                    let now = tokio::time::Instant::now();
+                    match empty_since {
+                        Some(start) => {
+                            if now.duration_since(start).as_secs() >= timeout_secs {
+                                // Final double-check before shutdown
+                                match crate::minecraft::java::get_player_count(&target).await {
+                                    Ok(final_count) if final_count <= min_players => {
+                                        if let Err(e) = crate::minecraft::java::execute_command(&cmd, true) {
+                                            tracing::error!("Auto-shutdown failed: {e}");
+                                        } else {
+                                            tracing::info!("Server below {} players for {}s, triggered shutdown: {}", min_players + 1, timeout_secs, cmd);
+                                            if let Some(ref url) = shutdown_webhook {
+                                                let _ = crate::minecraft::java::send_webhook(url, &format!("Server shut down due to inactivity (players: {final_count})"));
+                                            }
+                                        }
+                                        empty_since = None; // Reset
+                                    }
+                                    _ => {
+                                        empty_since = None; // Activity resumed
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            empty_since = Some(now);
+                        }
+                    }
+                }
+                Ok(_) => {
+                    empty_since = None; // Players online, reset timer
+                }
+                Err(_) => {
+                    // Server likely already offline, reset timer
+                    empty_since = None;
+                }
+            }
+        }
+    });
+}
+

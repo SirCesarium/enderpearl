@@ -33,6 +33,15 @@ pub struct TomlRoute {
     pub startup_cmd: Option<String>,
     #[serde(default = "default_startup_on")]
     pub startup_on: TomlStartupOn,
+    pub shutdown_cmd: Option<String>,
+    #[serde(default = "default_shutdown_timeout")]
+    pub shutdown_timeout: u64,
+    #[serde(default = "default_check_interval")]
+    pub check_interval: u64,
+    #[serde(default)]
+    pub min_players: usize,
+    pub startup_webhook: Option<String>,
+    pub shutdown_webhook: Option<String>,
     pub offline_motd: Option<String>,
     pub offline_message: Option<String>,
 }
@@ -68,6 +77,14 @@ const fn default_peek_timeout() -> u64 {
     3000
 }
 
+const fn default_shutdown_timeout() -> u64 {
+    300
+}
+
+const fn default_check_interval() -> u64 {
+    60
+}
+
 impl TryFrom<TomlConfig> for EnderConfig {
     type Error = EnderError;
 
@@ -98,6 +115,12 @@ impl TryFrom<TomlConfig> for EnderConfig {
                         TomlStartupOn::Ping => StartupOn::Ping,
                         TomlStartupOn::Always => StartupOn::Always,
                     },
+                    shutdown_cmd: route.shutdown_cmd,
+                    shutdown_timeout_secs: route.shutdown_timeout,
+                    check_interval_secs: route.check_interval,
+                    min_players: route.min_players,
+                    startup_webhook: route.startup_webhook,
+                    shutdown_webhook: route.shutdown_webhook,
                     offline_motd: route.offline_motd,
                     offline_message: route.offline_message,
                 })
