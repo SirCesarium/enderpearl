@@ -35,11 +35,11 @@ inquire = { version = "0.9", optional = true }
 default = ["full"]
 
 # Groups
-full = ["cli", "java", "bedrock", "web", "pretty-cli", "logging"]
+full = ["cli", "java", "web", "pretty-cli", "logging"]
 
 # Protocol logic
 java = []
-bedrock = []
+
 web = []
 
 # UI/UX Features
