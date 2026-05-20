@@ -83,9 +83,11 @@ async fn run() -> anyhow::Result<()> {
     {
         let proxy = Arc::new(minecraft::java::JavaProxy {
             targets: route.targets.clone(),
-            wake_command: route.wake_command.clone(),
+            startup_cmd: route.startup_cmd.clone(),
+            startup_on: route.startup_on,
             offline_motd: route.offline_motd.clone(),
             offline_message: route.offline_message.clone(),
+            debug: config.debug,
         });
         config.java_proxy_port = Some(proxy.serve().await?);
     }

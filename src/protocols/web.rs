@@ -1,8 +1,8 @@
-use crate::hooks::packet_logger::PacketLogger;
-use refractium::{hook_protocol, Http};
+use crate::hooks::DebugHook;
+use refractium::{hook_protocol, protocols::http::Http};
 
 hook_protocol!(
     wrapper: HookedHttp,
     proto: Http,
-    hooks: [PacketLogger]
+    hooks: [DebugHook]
 );

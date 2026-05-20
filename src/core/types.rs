@@ -9,12 +9,21 @@ pub struct EnderConfig {
     pub peek_timeout_ms: u64,
     pub upstreams: Vec<EnderRoute>,
     pub java_proxy_port: Option<u16>,
+    pub debug: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupOn {
+    Join,
+    Ping,
+    Always,
 }
 
 pub struct EnderRoute {
     pub protocol: Arc<dyn RefractiumProtocol>,
     pub targets: Vec<String>,
-    pub wake_command: Option<String>,
+    pub startup_cmd: Option<String>,
+    pub startup_on: StartupOn,
     pub offline_motd: Option<String>,
     pub offline_message: Option<String>,
 }
@@ -28,6 +37,7 @@ impl Default for EnderConfig {
             peek_timeout_ms: 3000,
             upstreams: Vec::new(),
             java_proxy_port: None,
+            debug: false,
         }
     }
 }

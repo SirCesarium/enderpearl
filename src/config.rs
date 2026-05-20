@@ -1,4 +1,4 @@
-use crate::core::types::{EnderConfig, EnderRoute};
+use crate::core::types::{EnderConfig, EnderRoute, StartupOn};
 use crate::errors::{EnderError, Result};
 use crate::protocols::ProtocolMeta;
 use serde::{Deserialize, Serialize};
@@ -21,15 +21,32 @@ pub struct ServerConfig {
     pub peek_buffer_size: usize,
     #[serde(default = "default_peek_timeout")]
     pub peek_timeout_ms: u64,
+    #[serde(default)]
+    pub debug: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct TomlRoute {
     pub forward_to: TomlTarget,
-    pub wake_command: Option<String>,
+    #[serde(alias = "wake_command")]
+    pub startup_cmd: Option<String>,
+    #[serde(default = "default_startup_on")]
+    pub startup_on: TomlStartupOn,
     pub offline_motd: Option<String>,
     pub offline_message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum TomlStartupOn {
+    Join,
+    Ping,
+    Always,
+}
+
+fn default_startup_on() -> TomlStartupOn {
+    TomlStartupOn::Join
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -68,14 +85,19 @@ impl TryFrom<TomlConfig> for EnderConfig {
                     EnderError::Config(name.clone(), "unknown protocol".to_string())
                 })?;
 
-                let protocol = meta.kind.instantiate().ok_or_else(|| {
+                let protocol = meta.kind.instantiate(toml.server.debug).ok_or_else(|| {
                     EnderError::Config(name.clone(), format!("requires '{}' feature", meta.feature))
                 })?;
 
                 Ok(EnderRoute {
                     protocol,
                     targets,
-                    wake_command: route.wake_command,
+                    startup_cmd: route.startup_cmd,
+                    startup_on: match route.startup_on {
+                        TomlStartupOn::Join => StartupOn::Join,
+                        TomlStartupOn::Ping => StartupOn::Ping,
+                        TomlStartupOn::Always => StartupOn::Always,
+                    },
                     offline_motd: route.offline_motd,
                     offline_message: route.offline_message,
                 })
@@ -89,6 +111,7 @@ impl TryFrom<TomlConfig> for EnderConfig {
             peek_timeout_ms: toml.server.peek_timeout_ms,
             upstreams,
             java_proxy_port: None,
+            debug: toml.server.debug,
         })
     }
 }

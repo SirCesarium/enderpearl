@@ -13,17 +13,31 @@ pub enum ProtocolKind {
     Web,
 }
 
+use crate::hooks::DebugHook;
+use crate::protocols::java::MinecraftJava;
+use refractium::hook_protocol;
 use std::sync::Arc;
+
+#[cfg(feature = "java")]
+hook_protocol!(
+    wrapper: HookedJava,
+    proto: MinecraftJava,
+    hooks: [DebugHook]
+);
 
 impl ProtocolKind {
     /// Creates a protocol instance for this kind, if the feature is enabled.
     #[must_use]
-    pub fn instantiate(self) -> Option<Arc<dyn refractium::RefractiumProtocol>> {
+    pub fn instantiate(self, debug: bool) -> Option<Arc<dyn refractium::RefractiumProtocol>> {
         match self {
             Self::Java => {
                 #[cfg(feature = "java")]
                 {
-                    Some(Arc::new(java::MinecraftJava))
+                    if debug {
+                        Some(Arc::new(HookedJava::new()))
+                    } else {
+                        Some(Arc::new(java::MinecraftJava))
+                    }
                 }
                 #[cfg(not(feature = "java"))]
                 {
@@ -34,7 +48,11 @@ impl ProtocolKind {
             Self::Web => {
                 #[cfg(feature = "web")]
                 {
-                    Some(Arc::new(web::HookedHttp::new()))
+                    if debug {
+                        Some(Arc::new(web::HookedHttp::new()))
+                    } else {
+                        Some(Arc::new(refractium::protocols::http::Http))
+                    }
                 }
                 #[cfg(not(feature = "web"))]
                 {
