@@ -1,11 +1,11 @@
 use crate::error;
-use crate::core::types::StartupOn;
+use crate::core::types::{StartupOn, LifecycleHandler};
 use crate::errors::{EnderError, Result};
 use crate::minecraft::varint::{decode_string, decode_varint, encode_mc_packet, encode_varint, read_varint};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
@@ -25,8 +25,11 @@ pub struct Handshake {
 
 pub struct JavaProxy {
     pub targets: Vec<String>,
-    pub startup_cmd: Option<String>,
     pub startup_on: StartupOn,
+    pub handler: Option<Arc<dyn LifecycleHandler>>,
+    pub shutdown_timeout_secs: u64,
+    pub check_interval_secs: u64,
+    pub min_players: usize,
     pub offline_motd: Option<String>,
     pub offline_message: Option<String>,
     pub startup_webhook: Option<String>,
@@ -37,21 +40,18 @@ pub struct JavaProxy {
 
 impl JavaProxy {
     /// Binds a TCP listener on `127.0.0.1:0` and spawns the accept loop.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the listener cannot be bound.
     pub async fn serve(self: Arc<Self>) -> Result<u16> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let port = listener.local_addr()?.port();
 
+        let proxy_accept = self.clone();
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, _)) => {
-                        let proxy = self.clone();
+                        let proxy = proxy_accept.clone();
                         tokio::spawn(async move {
-                            let () = proxy.handle_connection(stream).await;
+                            let _ = proxy.handle_connection(stream).await;
                         });
                     }
                     Err(e) => {
@@ -61,10 +61,58 @@ impl JavaProxy {
             }
         });
 
+        // Spawn inactivity monitor if a handler is present and timeout is configured
+        if self.handler.is_some() && self.shutdown_timeout_secs > 0 {
+            let monitor_proxy = self.clone();
+            tokio::spawn(async move {
+                monitor_proxy.spawn_monitor().await;
+            });
+        }
+
         Ok(port)
     }
 
-    async fn handle_connection(self: Arc<Self>, mut stream: TcpStream) {
+    async fn spawn_monitor(&self) {
+        let mut empty_since: Option<tokio::time::Instant> = None;
+        let target = self.targets[0].clone();
+
+        loop {
+            tokio::time::sleep(Duration::from_secs(self.check_interval_secs)).await;
+
+            match get_player_count(&target).await {
+                Ok(count) if count <= self.min_players => {
+                    let now = tokio::time::Instant::now();
+                    match empty_since {
+                        Some(start) => {
+                            if now.duration_since(start).as_secs() >= self.shutdown_timeout_secs {
+                                // Final check
+                                if let Ok(final_count) = get_player_count(&target).await {
+                                    if final_count <= self.min_players {
+                                        if let Some(ref handler) = self.handler {
+                                            if let Err(e) = handler.on_shutdown().await {
+                                                error!("Auto-shutdown handler failed: {e}");
+                                            } else {
+                                                tracing::info!("Auto-shutdown triggered successfully");
+                                                if let Some(ref url) = self.shutdown_webhook {
+                                                    let _ = send_webhook(url, &format!("Server shut down due to inactivity (players: {final_count})"));
+                                                }
+                                            }
+                                        }
+                                        empty_since = None;
+                                    }
+                                }
+                            }
+                        }
+                        None => empty_since = Some(now),
+                    }
+                }
+                Ok(_) => empty_since = None,
+                Err(_) => empty_since = None,
+            }
+        }
+    }
+
+    async fn handle_connection(self: Arc<Self>, mut stream: TcpStream) -> Result<()> {
         if self.debug {
             if let Ok(addr) = stream.peer_addr() {
                 tracing::info!("New Java connection from {}", addr);
@@ -74,30 +122,16 @@ impl JavaProxy {
 
         if any_online {
             self.is_waking.store(false, Ordering::SeqCst);
-            if let Err(e) = proxy_to_backend(&mut stream, &self.targets, None).await {
-                error!("Java proxy backend: {e:#}");
-            }
-            return;
+            return proxy_to_backend(&mut stream, &self.targets, None).await;
         }
 
-        let Ok(raw_packet) = read_raw_packet(&mut stream).await else {
-            return;
-        };
+        let raw_packet = read_raw_packet(&mut stream).await?;
+        let handshake = parse_handshake(&raw_packet)?;
 
-        let Ok(handshake) = parse_handshake(&raw_packet) else {
-            return;
-        };
-
-        let result = match handshake.next_state {
+        match handshake.next_state {
             1 => self.handle_status(&mut stream, &handshake).await,
             2 => self.handle_login(&mut stream, &handshake).await,
             _ => proxy_to_backend(&mut stream, &self.targets, Some(&raw_packet)).await,
-        };
-
-        if let Err(e) = result {
-            if self.debug {
-                error!("Java proxy: {e:#}");
-            }
         }
     }
 
@@ -106,7 +140,7 @@ impl JavaProxy {
             if timeout(Duration::from_millis(500), TcpStream::connect(target))
                 .await
                 .ok()
-                .and_then(std::result::Result::ok)
+                .and_then(|r| r.ok())
                 .is_some()
             {
                 return true;
@@ -115,11 +149,11 @@ impl JavaProxy {
         false
     }
 
-    async fn handle_status(self: &Arc<Self>, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
-        if let Some(ref cmd) = self.startup_cmd {
-            if matches!(self.startup_on, StartupOn::Ping | StartupOn::Always) {
-                if self.is_waking.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                    execute_command(cmd, false)?;
+    async fn handle_status(&self, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
+        if matches!(self.startup_on, StartupOn::Ping | StartupOn::Always) {
+            if self.is_waking.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                if let Some(ref handler) = self.handler {
+                    handler.on_startup().await?;
                     if let Some(ref url) = self.startup_webhook {
                         let _ = send_webhook(url, "Server starting up (triggered by Ping)");
                     }
@@ -128,43 +162,39 @@ impl JavaProxy {
         }
 
         let _request = read_raw_packet(stream).await?;
-
         let motd = self.offline_motd.as_deref().unwrap_or(DEFAULT_MOTD);
         write_status_response(stream, motd).await?;
 
         let ping = read_raw_packet(stream).await?;
-        stream.write_all(&ping).await?;
+        stream.write_all(&ping).await.map_err(EnderError::Io)?;
 
         Ok(())
     }
 
-    async fn handle_login(self: &Arc<Self>, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
-        if let Some(ref cmd) = self.startup_cmd {
-            if matches!(self.startup_on, StartupOn::Join | StartupOn::Always) {
-                if self.is_waking.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                    execute_command(cmd, false)?;
-                    if let Some(ref url) = self.startup_webhook {
-                        let _ = send_webhook(url, "Server starting up (triggered by Join)");
-                    }
+    async fn handle_login(&self, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
+        if self.is_waking.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            if let Some(ref handler) = self.handler {
+                handler.on_startup().await?;
+                if let Some(ref url) = self.startup_webhook {
+                    let _ = send_webhook(url, "Server starting up (triggered by Join)");
                 }
             }
         }
 
-        let _login_start = read_raw_packet(stream).await?;
-
-        let reason = self.offline_message.as_deref().unwrap_or(DEFAULT_DISCONNECT);
-        write_disconnect_response(stream, reason).await
+        let msg = self.offline_message.as_deref().unwrap_or(DEFAULT_DISCONNECT);
+        let mut packet = encode_varint(0x00);
+        packet.extend_from_slice(&encode_mc_packet(msg.as_bytes())?);
+        stream.write_all(&encode_mc_packet(&packet)?).await.map_err(EnderError::Io)?;
+        
+        Ok(())
     }
 }
 
-async fn read_raw_packet(stream: &mut TcpStream) -> Result<Vec<u8>> {
-    let raw_length = read_varint(stream).await?;
-    let length = usize::try_from(raw_length)
-        .map_err(|_| EnderError::PacketParse("Negative packet length".into()))?;
-    let mut data = vec![0u8; length];
-    stream.read_exact(&mut data).await.map_err(EnderError::Io)?;
-
-    encode_mc_packet(&data)
+async fn write_status_response(stream: &mut TcpStream, json_motd: &str) -> Result<()> {
+    let mut packet = encode_varint(0x00);
+    packet.extend_from_slice(&encode_mc_packet(json_motd.as_bytes())?);
+    stream.write_all(&encode_mc_packet(&packet)?).await.map_err(EnderError::Io)?;
+    Ok(())
 }
 
 fn parse_handshake(raw: &[u8]) -> Result<Handshake> {
@@ -172,152 +202,97 @@ fn parse_handshake(raw: &[u8]) -> Result<Handshake> {
     let _length = decode_varint(raw, &mut offset)?;
     let packet_id = decode_varint(raw, &mut offset)?;
     if packet_id != 0x00 {
-        return Err(EnderError::PacketParse(format!(
-            "Expected handshake packet (ID 0x00), got 0x{packet_id:02X}"
-        )));
+        return Err(EnderError::PacketParse(format!("Expected handshake packet ID 0x00, got {packet_id:02x}")));
     }
+
     let proto_ver = decode_varint(raw, &mut offset)?;
     let addr = decode_string(raw, &mut offset)?;
-    let port = u16::from_be_bytes([raw[offset], raw[offset + 1]]);
+    let mut port_bytes = [0u8; 2];
+    port_bytes.copy_from_slice(&raw[offset..offset + 2]);
+    let port = u16::from_be_bytes(port_bytes);
     offset += 2;
     let next_state = decode_varint(raw, &mut offset)?;
 
-    Ok(Handshake { proto_ver, addr, port, next_state, raw: raw.to_vec() })
+    Ok(Handshake {
+        proto_ver,
+        addr,
+        port,
+        next_state,
+        raw: raw.to_vec(),
+    })
 }
 
-async fn write_status_response(stream: &mut TcpStream, motd: &str) -> Result<()> {
-    let json_bytes = motd.as_bytes();
-    let mut payload = encode_varint(0x00);
-    payload.extend_from_slice(&encode_mc_packet(json_bytes)?);
+async fn read_raw_packet(stream: &mut TcpStream) -> Result<Vec<u8>> {
+    let raw_length = read_varint(stream).await?;
+    let length = usize::try_from(raw_length).map_err(|_| EnderError::PacketParse("Negative packet length".into()))?;
+    let mut data = vec![0u8; length];
+    stream.read_exact(&mut data).await.map_err(EnderError::Io)?;
 
-    let packet = encode_mc_packet(&payload)?;
-    stream.write_all(&packet).await.map_err(EnderError::Io)?;
-    Ok(())
+    encode_mc_packet(&data)
 }
 
-async fn write_disconnect_response(stream: &mut TcpStream, reason: &str) -> Result<()> {
-    let json_bytes = reason.as_bytes();
-    let mut payload = encode_varint(0x00);
-    payload.extend_from_slice(&encode_mc_packet(json_bytes)?);
+async fn proxy_to_backend(client: &mut TcpStream, targets: &[String], initial_packet: Option<&[u8]>) -> Result<()> {
+    for target in targets {
+        if let Ok(mut backend) = TcpStream::connect(target).await {
+            if let Some(pkt) = initial_packet {
+                backend.write_all(pkt).await.map_err(EnderError::Io)?;
+            }
+            let (mut client_read, mut client_write) = client.split();
+            let (mut backend_read, mut backend_write) = backend.split();
 
-    let packet = encode_mc_packet(&payload)?;
-    stream.write_all(&packet).await.map_err(EnderError::Io)?;
-    Ok(())
-}
-
-pub fn execute_command(cmd: &str, is_shutdown: bool) -> Result<()> {
-    let parts: Vec<&str> = cmd.split_whitespace().collect();
-    if let Some(program) = parts.first() {
-        Command::new(program)
-            .args(&parts[1..])
-            .spawn()
-            .map_err(|e| {
-                if is_shutdown {
-                    EnderError::ShutdownFailure(program.to_string(), e.to_string())
-                } else {
-                    EnderError::WakeupFailure(program.to_string(), e.to_string())
-                }
-            })?;
+            let _ = tokio::join!(
+                tokio::io::copy(&mut client_read, &mut backend_write),
+                tokio::io::copy(&mut backend_read, &mut client_write)
+            );
+            return Ok(());
+        }
     }
-    Ok(())
+    Err(EnderError::Proxy("All targets unreachable".into()))
 }
 
-async fn proxy_to_backend(
-    stream: &mut TcpStream,
-    targets: &[String],
-    initial_data: Option<&[u8]>,
-) -> Result<()> {
-    let target = targets.first()
-        .ok_or_else(|| EnderError::NoBackend("No targets configured in Java route".into()))?;
-    let mut backend = TcpStream::connect(target)
-        .await
-        .map_err(|e| EnderError::Proxy(format!("Failed to connect to backend {target}: {e}")))?;
-    if let Some(data) = initial_data {
-        backend.write_all(data).await.map_err(EnderError::Io)?;
-    }
-    proxy_bidirectional_raw(stream, &mut backend).await
-}
-
-async fn proxy_bidirectional_raw(client: &mut TcpStream, backend: &mut TcpStream) -> Result<()> {
-    let (mut cr, mut cw) = client.split();
-    let (mut br, mut bw) = backend.split();
-
-    let c2b = copy(&mut cr, &mut bw);
-    let b2c = copy(&mut br, &mut cw);
-
-    tokio::select! {
-        r = c2b => r,
-        r = b2c => r,
-    }?;
-
-    Ok(())
-}
 pub async fn get_player_count(target: &str) -> Result<usize> {
-    tracing::debug!("Pinging backend {} for player count", target);
     let mut stream = timeout(Duration::from_secs(2), TcpStream::connect(target))
         .await
-        .map_err(|_| {
-            tracing::debug!("Connection timeout to {} for player count", target);
-            EnderError::Proxy("Timeout connecting to backend for player count".into())
-        })?
-        .map_err(|e| {
-            tracing::debug!("Connection error to {} for player count: {}", target, e);
-            EnderError::Io(e)
-        })?;
+        .map_err(|_| EnderError::Proxy("Timeout connecting to backend for player count".into()))?
+        .map_err(EnderError::Io)?;
 
-    // 1. Handshake (state 1 = status)
     let hostname = target.split(':').next().unwrap_or("localhost");
-    let mut handshake = encode_varint(0x00); // Packet ID
-    handshake.extend_from_slice(&encode_varint(-1)); // Protocol version
+    let mut handshake = encode_varint(0x00);
+    handshake.extend_from_slice(&encode_varint(-1));
     handshake.extend_from_slice(&encode_mc_packet(hostname.as_bytes())?);
-    handshake.extend_from_slice(&25565u16.to_be_bytes()); // Port
-    handshake.extend_from_slice(&encode_varint(1)); // Next state: Status
-    
+    handshake.extend_from_slice(&25565u16.to_be_bytes());
+    handshake.extend_from_slice(&encode_varint(1));
     stream.write_all(&encode_mc_packet(&handshake)?).await.map_err(EnderError::Io)?;
 
-    // 2. Status Request
     let status_req = encode_mc_packet(&encode_varint(0x00))?;
     stream.write_all(&status_req).await.map_err(EnderError::Io)?;
 
-    // 3. Read Response
     let response = read_raw_packet(&mut stream).await?;
     let mut offset = 0;
-    let _total_len = decode_varint(&response, &mut offset)?; // Total packet length
-    let _packet_id = decode_varint(&response, &mut offset)?; // Packet ID (0x00)
-    let json_str = decode_string(&response, &mut offset)?;   // The JSON string
+    let _total_len = decode_varint(&response, &mut offset)?;
+    let _packet_id = decode_varint(&response, &mut offset)?;
+    let json_str = decode_string(&response, &mut offset)?;
 
-    // 4. Parse JSON
-    let v: serde_json::Value = serde_json::from_str(&json_str)
-        .map_err(|e| {
-            tracing::error!("Failed to parse status JSON from {}: {}", target, e);
-            EnderError::PacketParse(format!("Invalid status JSON: {e}"))
-        })?;
-    
-    let online = v["players"]["online"].as_u64().ok_or_else(|| {
-        tracing::warn!("Status JSON from {} missing players.online", target);
-        EnderError::PacketParse("Missing players.online in status response".into())
-    })? as usize;
-
-    tracing::debug!("Backend {} has {} players online", target, online);
+    let v: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| EnderError::PacketParse(format!("Invalid status JSON: {e}")))?;
+    let online = v["players"]["online"].as_u64().unwrap_or(0) as usize;
     Ok(online)
 }
 
-pub fn send_webhook(url: &str, message: &str) -> Result<()> {
+pub fn execute_command(cmd: &str, _wait: bool) -> Result<()> {
+    let _child = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .spawn()
+        .map_err(EnderError::Io)?;
+    Ok(())
+}
+
+fn send_webhook(url: &str, content: &str) -> Result<()> {
+    let client = Client::new();
+    let body = json!({ "content": content });
     let url = url.to_string();
-    let message = message.to_string();
-    
     tokio::spawn(async move {
-        let client = Client::new();
-        let payload = json!({
-            "content": message,
-            "username": "Enderpearl Proxy"
-        });
-
-        match client.post(&url).json(&payload).send().await {
-            Ok(_) => tracing::debug!("Webhook sent successfully to {url}"),
-            Err(e) => tracing::error!("Failed to send webhook to {url}: {e}"),
-        }
+        let _ = client.post(url).json(&body).send().await;
     });
-
     Ok(())
 }

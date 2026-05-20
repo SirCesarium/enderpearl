@@ -3,7 +3,7 @@ use clap::{CommandFactory, Parser};
 use enderpearl::cli::{Cli, Commands};
 use enderpearl::config::TomlConfig;
 use enderpearl::core::router::EnderRouter;
-use enderpearl::core::types::EnderConfig;
+use enderpearl::core::types::{EnderConfig, LifecycleHandler, AsyncResultFuture};
 use enderpearl::display::EnderDisplay;
 use enderpearl::minecraft;
 use enderpearl::protocols::{ProtocolKind, PROTOCOLS};
@@ -30,6 +30,33 @@ async fn main() {
         eprintln!("CRITICAL ERROR: {:?}", err);
 
         process::exit(1);
+    }
+}
+
+struct ShellLifecycleHandler {
+    startup_cmd: Option<String>,
+    shutdown_cmd: Option<String>,
+}
+
+impl LifecycleHandler for ShellLifecycleHandler {
+    fn on_startup(&self) -> AsyncResultFuture {
+        let cmd = self.startup_cmd.clone();
+        Box::pin(async move {
+            if let Some(c) = cmd {
+                enderpearl::minecraft::java::execute_command(&c, false)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn on_shutdown(&self) -> AsyncResultFuture {
+        let cmd = self.shutdown_cmd.clone();
+        Box::pin(async move {
+            if let Some(c) = cmd {
+                enderpearl::minecraft::java::execute_command(&c, true)?;
+            }
+            Ok(())
+        })
     }
 }
 
@@ -68,7 +95,19 @@ async fn run() -> anyhow::Result<()> {
     let toml_config: TomlConfig =
         toml::from_str(&config_str).context("The configuration file has invalid TOML syntax")?;
 
-    let mut config = EnderConfig::try_from(toml_config)?;
+    let mut config = EnderConfig::try_from(toml_config.clone())?;
+
+    // Inject shell handlers from TOML into the agnostic config
+    for (name, toml_route) in &toml_config.upstream {
+        if let Some(route) = config.upstreams.iter_mut().find(|r| r.protocol.name() == *name || name == "minecraft_java") {
+            if toml_route.startup_cmd.is_some() || toml_route.shutdown_cmd.is_some() {
+                route.handler = Some(Arc::new(ShellLifecycleHandler {
+                    startup_cmd: toml_route.startup_cmd.clone(),
+                    shutdown_cmd: toml_route.shutdown_cmd.clone(),
+                }));
+            }
+        }
+    }
 
     if let Some(route) = config
         .upstreams
@@ -83,8 +122,11 @@ async fn run() -> anyhow::Result<()> {
     {
         let proxy = Arc::new(minecraft::java::JavaProxy {
             targets: route.targets.clone(),
-            startup_cmd: route.startup_cmd.clone(),
             startup_on: route.startup_on,
+            handler: route.handler.clone(),
+            shutdown_timeout_secs: route.shutdown_timeout_secs,
+            check_interval_secs: route.check_interval_secs,
+            min_players: route.min_players,
             offline_motd: route.offline_motd.clone(),
             offline_message: route.offline_message.clone(),
             startup_webhook: route.startup_webhook.clone(),
@@ -108,12 +150,6 @@ async fn run() -> anyhow::Result<()> {
     EnderDisplay::print_listen(&addr);
     EnderDisplay::print_features();
 
-    for route in config.upstreams.clone() {
-        if route.shutdown_cmd.is_some() {
-            spawn_shutdown_monitor(route);
-        }
-    }
-
     let router = EnderRouter::new(&config)
         .context("Router initialization failed (check if protocol features are enabled)")?;
 
@@ -124,74 +160,3 @@ async fn run() -> anyhow::Result<()> {
 
     Ok(())
 }
-
-fn spawn_shutdown_monitor(route: enderpearl::core::types::EnderRoute) {
-    let target = route.targets[0].clone();
-    let cmd = route.shutdown_cmd.unwrap();
-    let timeout_secs = route.shutdown_timeout_secs;
-    let interval_secs = route.check_interval_secs;
-    let min_players = route.min_players;
-    let shutdown_webhook = route.shutdown_webhook;
-
-    tokio::spawn(async move {
-        let mut empty_since: Option<tokio::time::Instant> = None;
-
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
-
-            match crate::minecraft::java::get_player_count(&target).await {
-                Ok(count) if count <= min_players => {
-                    let now = tokio::time::Instant::now();
-                    match empty_since {
-                        Some(start) => {
-                            let elapsed = now.duration_since(start).as_secs();
-                            if elapsed >= timeout_secs {
-                                tracing::info!("Server {} has been below threshold ({} players) for {}s. Triggering final check...", target, count, elapsed);
-                                // Final double-check before shutdown
-                                match crate::minecraft::java::get_player_count(&target).await {
-                                    Ok(final_count) if final_count <= min_players => {
-                                        if let Err(e) = crate::minecraft::java::execute_command(&cmd, true) {
-                                            tracing::error!("Auto-shutdown failed for {}: {}", target, e);
-                                        } else {
-                                            tracing::info!("Shutdown triggered for {}: {}", target, cmd);
-                                            if let Some(ref url) = shutdown_webhook {
-                                                let _ = crate::minecraft::java::send_webhook(url, &format!("Server {} shut down due to inactivity (players: {final_count})", target));
-                                            }
-                                        }
-                                        empty_since = None; // Reset
-                                    }
-                                    Ok(final_count) => {
-                                        tracing::info!("Shutdown aborted for {}: activity detected in final check ({} players)", target, final_count);
-                                        empty_since = None;
-                                    }
-                                    Err(e) => {
-                                        tracing::debug!("Final check for {} failed, assuming already offline: {}", target, e);
-                                        empty_since = None;
-                                    }
-                                }
-                            } else {
-                                tracing::debug!("Server {} empty for {}/{}s", target, elapsed, timeout_secs);
-                            }
-                        }
-                        None => {
-                            tracing::info!("Server {} is now below threshold ({} players). Starting {}s shutdown timer.", target, count, timeout_secs);
-                            empty_since = Some(now);
-                        }
-                    }
-                }
-                Ok(count) => {
-                    if empty_since.is_some() {
-                        tracing::info!("Activity detected on {} ({} players). Resetting shutdown timer.", target, count);
-                    }
-                    empty_since = None;
-                }
-                Err(e) => {
-                    // Don't reset the timer on error (e.g. server starting up or transient network issue)
-                    // unless we are sure the server is unreachable for a good reason.
-                    tracing::trace!("Monitor check for {} failed: {}", target, e);
-                }
-            }
-        }
-    });
-}
-

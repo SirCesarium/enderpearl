@@ -1,6 +1,16 @@
 use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
 
 use refractium::RefractiumProtocol;
+use crate::errors::Result;
+
+pub type AsyncResultFuture = Pin<Box<dyn Future<Output = Result<()>> + Send>>;
+
+pub trait LifecycleHandler: Send + Sync {
+    fn on_startup(&self) -> AsyncResultFuture;
+    fn on_shutdown(&self) -> AsyncResultFuture;
+}
 
 pub struct EnderConfig {
     pub bind: String,
@@ -23,9 +33,8 @@ pub enum StartupOn {
 pub struct EnderRoute {
     pub protocol: Arc<dyn RefractiumProtocol>,
     pub targets: Vec<String>,
-    pub startup_cmd: Option<String>,
     pub startup_on: StartupOn,
-    pub shutdown_cmd: Option<String>,
+    pub handler: Option<Arc<dyn LifecycleHandler>>,
     pub shutdown_timeout_secs: u64,
     pub check_interval_secs: u64,
     pub min_players: usize,

@@ -109,13 +109,12 @@ impl TryFrom<TomlConfig> for EnderConfig {
                 Ok(EnderRoute {
                     protocol,
                     targets,
-                    startup_cmd: route.startup_cmd,
                     startup_on: match route.startup_on {
                         TomlStartupOn::Join => StartupOn::Join,
                         TomlStartupOn::Ping => StartupOn::Ping,
                         TomlStartupOn::Always => StartupOn::Always,
                     },
-                    shutdown_cmd: route.shutdown_cmd,
+                    handler: None, // Will be injected by the caller (CLI or Lib user)
                     shutdown_timeout_secs: route.shutdown_timeout,
                     check_interval_secs: route.check_interval,
                     min_players: route.min_players,
