@@ -1,4 +1,5 @@
 use crate::error;
+use crate::core::types::StartupOn;
 use crate::errors::{EnderError, Result};
 use crate::minecraft::varint::{decode_string, decode_varint, encode_mc_packet, encode_varint, read_varint};
 use std::net::Ipv4Addr;
@@ -21,9 +22,11 @@ pub struct Handshake {
 
 pub struct JavaProxy {
     pub targets: Vec<String>,
-    pub wake_command: Option<String>,
+    pub startup_cmd: Option<String>,
+    pub startup_on: StartupOn,
     pub offline_motd: Option<String>,
     pub offline_message: Option<String>,
+    pub debug: bool,
 }
 
 impl JavaProxy {
@@ -80,7 +83,9 @@ impl JavaProxy {
         };
 
         if let Err(e) = result {
-            error!("Java proxy: {e:#}");
+            if self.debug {
+                error!("Java proxy: {e:#}");
+            }
         }
     }
 
@@ -99,6 +104,12 @@ impl JavaProxy {
     }
 
     async fn handle_status(self: &Arc<Self>, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
+        if let Some(ref cmd) = self.startup_cmd {
+            if matches!(self.startup_on, StartupOn::Ping | StartupOn::Always) {
+                execute_wake(cmd)?;
+            }
+        }
+
         let _request = read_raw_packet(stream).await?;
 
         let motd = self.offline_motd.as_deref().unwrap_or(DEFAULT_MOTD);
@@ -111,8 +122,10 @@ impl JavaProxy {
     }
 
     async fn handle_login(self: &Arc<Self>, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
-        if let Some(ref cmd) = self.wake_command {
-            execute_wake(cmd)?;
+        if let Some(ref cmd) = self.startup_cmd {
+            if matches!(self.startup_on, StartupOn::Join | StartupOn::Always) {
+                execute_wake(cmd)?;
+            }
         }
 
         let _login_start = read_raw_packet(stream).await?;
