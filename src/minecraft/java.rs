@@ -9,6 +9,7 @@ use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 const DEFAULT_MOTD: &str = r#"{"version":{"name":"1.21","protocol":766},"players":{"max":0,"online":0},"description":{"text":"§cServer offline — starting up..."}}"#;
+const DEFAULT_DISCONNECT: &str = r#"{"text":"§cServer offline — starting up..."}"#;
 
 pub struct Handshake {
     pub proto_ver: i32,
@@ -21,7 +22,8 @@ pub struct Handshake {
 pub struct JavaProxy {
     pub targets: Vec<String>,
     pub wake_command: Option<String>,
-    pub fake_motd: Option<String>,
+    pub offline_motd: Option<String>,
+    pub offline_message: Option<String>,
 }
 
 impl JavaProxy {
@@ -99,7 +101,7 @@ impl JavaProxy {
     async fn handle_status(self: &Arc<Self>, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
         let _request = read_raw_packet(stream).await?;
 
-        let motd = self.fake_motd.as_deref().unwrap_or(DEFAULT_MOTD);
+        let motd = self.offline_motd.as_deref().unwrap_or(DEFAULT_MOTD);
         write_status_response(stream, motd).await?;
 
         let ping = read_raw_packet(stream).await?;
@@ -108,12 +110,15 @@ impl JavaProxy {
         Ok(())
     }
 
-    async fn handle_login(self: &Arc<Self>, stream: &mut TcpStream, handshake: &Handshake) -> Result<()> {
+    async fn handle_login(self: &Arc<Self>, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
         if let Some(ref cmd) = self.wake_command {
             execute_wake(cmd)?;
         }
 
-        proxy_to_backend(stream, &self.targets, Some(&handshake.raw)).await
+        let _login_start = read_raw_packet(stream).await?;
+
+        let reason = self.offline_message.as_deref().unwrap_or(DEFAULT_DISCONNECT);
+        write_disconnect_response(stream, reason).await
     }
 }
 
@@ -147,6 +152,16 @@ fn parse_handshake(raw: &[u8]) -> Result<Handshake> {
 
 async fn write_status_response(stream: &mut TcpStream, motd: &str) -> Result<()> {
     let json_bytes = motd.as_bytes();
+    let mut payload = encode_varint(0x00);
+    payload.extend_from_slice(&encode_mc_packet(json_bytes)?);
+
+    let packet = encode_mc_packet(&payload)?;
+    stream.write_all(&packet).await.map_err(EnderError::Io)?;
+    Ok(())
+}
+
+async fn write_disconnect_response(stream: &mut TcpStream, reason: &str) -> Result<()> {
+    let json_bytes = reason.as_bytes();
     let mut payload = encode_varint(0x00);
     payload.extend_from_slice(&encode_mc_packet(json_bytes)?);
 
