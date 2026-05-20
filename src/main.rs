@@ -75,11 +75,10 @@ async fn run() -> anyhow::Result<()> {
         .iter()
         .find(|r| {
             let name = r.protocol.name();
-            let is_java = PROTOCOLS.iter().any(|p| {
+            PROTOCOLS.iter().any(|p| {
                 matches!(p.kind, ProtocolKind::Java)
                     && (p.id == name || p.aliases.contains(&name.as_str()))
-            });
-            is_java && (r.fake_motd.is_some() || r.wake_command.is_some())
+            })
         })
     {
         let proxy = Arc::new(minecraft::java::JavaProxy {
