@@ -90,6 +90,7 @@ async fn run() -> anyhow::Result<()> {
             startup_webhook: route.startup_webhook.clone(),
             shutdown_webhook: route.shutdown_webhook.clone(),
             debug: config.debug,
+            is_waking: std::sync::atomic::AtomicBool::new(false),
         });
         config.java_proxy_port = Some(proxy.serve().await?);
     }
@@ -143,37 +144,51 @@ fn spawn_shutdown_monitor(route: enderpearl::core::types::EnderRoute) {
                     let now = tokio::time::Instant::now();
                     match empty_since {
                         Some(start) => {
-                            if now.duration_since(start).as_secs() >= timeout_secs {
+                            let elapsed = now.duration_since(start).as_secs();
+                            if elapsed >= timeout_secs {
+                                tracing::info!("Server {} has been below threshold ({} players) for {}s. Triggering final check...", target, count, elapsed);
                                 // Final double-check before shutdown
                                 match crate::minecraft::java::get_player_count(&target).await {
                                     Ok(final_count) if final_count <= min_players => {
                                         if let Err(e) = crate::minecraft::java::execute_command(&cmd, true) {
-                                            tracing::error!("Auto-shutdown failed: {e}");
+                                            tracing::error!("Auto-shutdown failed for {}: {}", target, e);
                                         } else {
-                                            tracing::info!("Server below {} players for {}s, triggered shutdown: {}", min_players + 1, timeout_secs, cmd);
+                                            tracing::info!("Shutdown triggered for {}: {}", target, cmd);
                                             if let Some(ref url) = shutdown_webhook {
-                                                let _ = crate::minecraft::java::send_webhook(url, &format!("Server shut down due to inactivity (players: {final_count})"));
+                                                let _ = crate::minecraft::java::send_webhook(url, &format!("Server {} shut down due to inactivity (players: {final_count})", target));
                                             }
                                         }
                                         empty_since = None; // Reset
                                     }
-                                    _ => {
-                                        empty_since = None; // Activity resumed
+                                    Ok(final_count) => {
+                                        tracing::info!("Shutdown aborted for {}: activity detected in final check ({} players)", target, final_count);
+                                        empty_since = None;
+                                    }
+                                    Err(e) => {
+                                        tracing::debug!("Final check for {} failed, assuming already offline: {}", target, e);
+                                        empty_since = None;
                                     }
                                 }
+                            } else {
+                                tracing::debug!("Server {} empty for {}/{}s", target, elapsed, timeout_secs);
                             }
                         }
                         None => {
+                            tracing::info!("Server {} is now below threshold ({} players). Starting {}s shutdown timer.", target, count, timeout_secs);
                             empty_since = Some(now);
                         }
                     }
                 }
-                Ok(_) => {
-                    empty_since = None; // Players online, reset timer
-                }
-                Err(_) => {
-                    // Server likely already offline, reset timer
+                Ok(count) => {
+                    if empty_since.is_some() {
+                        tracing::info!("Activity detected on {} ({} players). Resetting shutdown timer.", target, count);
+                    }
                     empty_since = None;
+                }
+                Err(e) => {
+                    // Don't reset the timer on error (e.g. server starting up or transient network issue)
+                    // unless we are sure the server is unreachable for a good reason.
+                    tracing::trace!("Monitor check for {} failed: {}", target, e);
                 }
             }
         }
