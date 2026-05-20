@@ -4,6 +4,7 @@ use crate::errors::{EnderError, Result};
 use crate::minecraft::varint::{decode_string, decode_varint, encode_mc_packet, encode_varint, read_varint};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
@@ -31,6 +32,7 @@ pub struct JavaProxy {
     pub startup_webhook: Option<String>,
     pub shutdown_webhook: Option<String>,
     pub debug: bool,
+    pub is_waking: AtomicBool,
 }
 
 impl JavaProxy {
@@ -63,9 +65,15 @@ impl JavaProxy {
     }
 
     async fn handle_connection(self: Arc<Self>, mut stream: TcpStream) {
+        if self.debug {
+            if let Ok(addr) = stream.peer_addr() {
+                tracing::info!("New Java connection from {}", addr);
+            }
+        }
         let any_online = self.check_any_online().await;
 
         if any_online {
+            self.is_waking.store(false, Ordering::SeqCst);
             if let Err(e) = proxy_to_backend(&mut stream, &self.targets, None).await {
                 error!("Java proxy backend: {e:#}");
             }
@@ -110,9 +118,11 @@ impl JavaProxy {
     async fn handle_status(self: &Arc<Self>, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
         if let Some(ref cmd) = self.startup_cmd {
             if matches!(self.startup_on, StartupOn::Ping | StartupOn::Always) {
-                execute_command(cmd, false)?;
-                if let Some(ref url) = self.startup_webhook {
-                    let _ = send_webhook(url, "Server starting up (triggered by Ping)");
+                if self.is_waking.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                    execute_command(cmd, false)?;
+                    if let Some(ref url) = self.startup_webhook {
+                        let _ = send_webhook(url, "Server starting up (triggered by Ping)");
+                    }
                 }
             }
         }
@@ -131,9 +141,11 @@ impl JavaProxy {
     async fn handle_login(self: &Arc<Self>, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
         if let Some(ref cmd) = self.startup_cmd {
             if matches!(self.startup_on, StartupOn::Join | StartupOn::Always) {
-                execute_command(cmd, false)?;
-                if let Some(ref url) = self.startup_webhook {
-                    let _ = send_webhook(url, "Server starting up (triggered by Join)");
+                if self.is_waking.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                    execute_command(cmd, false)?;
+                    if let Some(ref url) = self.startup_webhook {
+                        let _ = send_webhook(url, "Server starting up (triggered by Join)");
+                    }
                 }
             }
         }
@@ -241,15 +253,22 @@ async fn proxy_bidirectional_raw(client: &mut TcpStream, backend: &mut TcpStream
     Ok(())
 }
 pub async fn get_player_count(target: &str) -> Result<usize> {
+    tracing::debug!("Pinging backend {} for player count", target);
     let mut stream = timeout(Duration::from_secs(2), TcpStream::connect(target))
         .await
-        .map_err(|_| EnderError::Proxy("Timeout connecting to backend for player count".into()))?
-        .map_err(EnderError::Io)?;
+        .map_err(|_| {
+            tracing::debug!("Connection timeout to {} for player count", target);
+            EnderError::Proxy("Timeout connecting to backend for player count".into())
+        })?
+        .map_err(|e| {
+            tracing::debug!("Connection error to {} for player count: {}", target, e);
+            EnderError::Io(e)
+        })?;
 
     // 1. Handshake (state 1 = status)
     let hostname = target.split(':').next().unwrap_or("localhost");
     let mut handshake = encode_varint(0x00); // Packet ID
-    handshake.extend_from_slice(&encode_varint(-1)); // Protocol version (-1 for modern-ish)
+    handshake.extend_from_slice(&encode_varint(-1)); // Protocol version
     handshake.extend_from_slice(&encode_mc_packet(hostname.as_bytes())?);
     handshake.extend_from_slice(&25565u16.to_be_bytes()); // Port
     handshake.extend_from_slice(&encode_varint(1)); // Next state: Status
@@ -263,14 +282,23 @@ pub async fn get_player_count(target: &str) -> Result<usize> {
     // 3. Read Response
     let response = read_raw_packet(&mut stream).await?;
     let mut offset = 0;
-    let _packet_id = decode_varint(&response, &mut offset)?;
-    let json_str = decode_string(&response, &mut offset)?;
+    let _total_len = decode_varint(&response, &mut offset)?; // Total packet length
+    let _packet_id = decode_varint(&response, &mut offset)?; // Packet ID (0x00)
+    let json_str = decode_string(&response, &mut offset)?;   // The JSON string
 
     // 4. Parse JSON
     let v: serde_json::Value = serde_json::from_str(&json_str)
-        .map_err(|e| EnderError::PacketParse(format!("Invalid status JSON: {e}")))?;
+        .map_err(|e| {
+            tracing::error!("Failed to parse status JSON from {}: {}", target, e);
+            EnderError::PacketParse(format!("Invalid status JSON: {e}"))
+        })?;
     
-    let online = v["players"]["online"].as_u64().unwrap_or(0) as usize;
+    let online = v["players"]["online"].as_u64().ok_or_else(|| {
+        tracing::warn!("Status JSON from {} missing players.online", target);
+        EnderError::PacketParse("Missing players.online in status response".into())
+    })? as usize;
+
+    tracing::debug!("Backend {} has {} players online", target, online);
     Ok(online)
 }
 
