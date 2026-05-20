@@ -15,7 +15,8 @@ pub struct EnderRoute {
     pub protocol: Arc<dyn RefractiumProtocol>,
     pub targets: Vec<String>,
     pub wake_command: Option<String>,
-    pub fake_motd: Option<String>,
+    pub offline_motd: Option<String>,
+    pub offline_message: Option<String>,
 }
 
 impl Default for EnderConfig {

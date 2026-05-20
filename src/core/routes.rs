@@ -8,7 +8,7 @@ use refractium::Transport;
 
 /// Translates `EnderConfig` upstreams into refractium TCP/UDP route lists.
 ///
-/// Routes with Java protocols that have `fake_motd` or `wake_command` are
+/// Routes with Java protocols that have `offline_motd` or `wake_command` are
 /// redirected to the local `JavaProxy` port instead of their original target.
 ///
 /// # Errors

@@ -28,7 +28,8 @@ pub struct ServerConfig {
 pub struct TomlRoute {
     pub forward_to: TomlTarget,
     pub wake_command: Option<String>,
-    pub fake_motd: Option<String>,
+    pub offline_motd: Option<String>,
+    pub offline_message: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -75,7 +76,8 @@ impl TryFrom<TomlConfig> for EnderConfig {
                     protocol,
                     targets,
                     wake_command: route.wake_command,
-                    fake_motd: route.fake_motd,
+                    offline_motd: route.offline_motd,
+                    offline_message: route.offline_message,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
