@@ -8,6 +8,8 @@ use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
+use serde_json::json;
+use reqwest::Client;
 
 const DEFAULT_MOTD: &str = r#"{"version":{"name":"1.21","protocol":766},"players":{"max":0,"online":0},"description":{"text":"§cServer offline — starting up..."}}"#;
 const DEFAULT_DISCONNECT: &str = r#"{"text":"§cServer offline — starting up..."}"#;
@@ -26,6 +28,8 @@ pub struct JavaProxy {
     pub startup_on: StartupOn,
     pub offline_motd: Option<String>,
     pub offline_message: Option<String>,
+    pub startup_webhook: Option<String>,
+    pub shutdown_webhook: Option<String>,
     pub debug: bool,
 }
 
@@ -106,7 +110,10 @@ impl JavaProxy {
     async fn handle_status(self: &Arc<Self>, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
         if let Some(ref cmd) = self.startup_cmd {
             if matches!(self.startup_on, StartupOn::Ping | StartupOn::Always) {
-                execute_wake(cmd)?;
+                execute_command(cmd, false)?;
+                if let Some(ref url) = self.startup_webhook {
+                    let _ = send_webhook(url, "Server starting up (triggered by Ping)");
+                }
             }
         }
 
@@ -124,7 +131,10 @@ impl JavaProxy {
     async fn handle_login(self: &Arc<Self>, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
         if let Some(ref cmd) = self.startup_cmd {
             if matches!(self.startup_on, StartupOn::Join | StartupOn::Always) {
-                execute_wake(cmd)?;
+                execute_command(cmd, false)?;
+                if let Some(ref url) = self.startup_webhook {
+                    let _ = send_webhook(url, "Server starting up (triggered by Join)");
+                }
             }
         }
 
@@ -183,13 +193,19 @@ async fn write_disconnect_response(stream: &mut TcpStream, reason: &str) -> Resu
     Ok(())
 }
 
-fn execute_wake(cmd: &str) -> Result<()> {
+pub fn execute_command(cmd: &str, is_shutdown: bool) -> Result<()> {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if let Some(program) = parts.first() {
         Command::new(program)
             .args(&parts[1..])
             .spawn()
-            .map_err(|e| EnderError::WakeupFailure(program.to_string(), e.to_string()))?;
+            .map_err(|e| {
+                if is_shutdown {
+                    EnderError::ShutdownFailure(program.to_string(), e.to_string())
+                } else {
+                    EnderError::WakeupFailure(program.to_string(), e.to_string())
+                }
+            })?;
     }
     Ok(())
 }
@@ -221,6 +237,59 @@ async fn proxy_bidirectional_raw(client: &mut TcpStream, backend: &mut TcpStream
         r = c2b => r,
         r = b2c => r,
     }?;
+
+    Ok(())
+}
+pub async fn get_player_count(target: &str) -> Result<usize> {
+    let mut stream = timeout(Duration::from_secs(2), TcpStream::connect(target))
+        .await
+        .map_err(|_| EnderError::Proxy("Timeout connecting to backend for player count".into()))?
+        .map_err(EnderError::Io)?;
+
+    // 1. Handshake (state 1 = status)
+    let hostname = target.split(':').next().unwrap_or("localhost");
+    let mut handshake = encode_varint(0x00); // Packet ID
+    handshake.extend_from_slice(&encode_varint(-1)); // Protocol version (-1 for modern-ish)
+    handshake.extend_from_slice(&encode_mc_packet(hostname.as_bytes())?);
+    handshake.extend_from_slice(&25565u16.to_be_bytes()); // Port
+    handshake.extend_from_slice(&encode_varint(1)); // Next state: Status
+    
+    stream.write_all(&encode_mc_packet(&handshake)?).await.map_err(EnderError::Io)?;
+
+    // 2. Status Request
+    let status_req = encode_mc_packet(&encode_varint(0x00))?;
+    stream.write_all(&status_req).await.map_err(EnderError::Io)?;
+
+    // 3. Read Response
+    let response = read_raw_packet(&mut stream).await?;
+    let mut offset = 0;
+    let _packet_id = decode_varint(&response, &mut offset)?;
+    let json_str = decode_string(&response, &mut offset)?;
+
+    // 4. Parse JSON
+    let v: serde_json::Value = serde_json::from_str(&json_str)
+        .map_err(|e| EnderError::PacketParse(format!("Invalid status JSON: {e}")))?;
+    
+    let online = v["players"]["online"].as_u64().unwrap_or(0) as usize;
+    Ok(online)
+}
+
+pub fn send_webhook(url: &str, message: &str) -> Result<()> {
+    let url = url.to_string();
+    let message = message.to_string();
+    
+    tokio::spawn(async move {
+        let client = Client::new();
+        let payload = json!({
+            "content": message,
+            "username": "Enderpearl Proxy"
+        });
+
+        match client.post(&url).json(&payload).send().await {
+            Ok(_) => tracing::debug!("Webhook sent successfully to {url}"),
+            Err(e) => tracing::error!("Failed to send webhook to {url}: {e}"),
+        }
+    });
 
     Ok(())
 }

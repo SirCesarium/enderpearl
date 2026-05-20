@@ -19,11 +19,18 @@ pub enum StartupOn {
     Always,
 }
 
+#[derive(Clone)]
 pub struct EnderRoute {
     pub protocol: Arc<dyn RefractiumProtocol>,
     pub targets: Vec<String>,
     pub startup_cmd: Option<String>,
     pub startup_on: StartupOn,
+    pub shutdown_cmd: Option<String>,
+    pub shutdown_timeout_secs: u64,
+    pub check_interval_secs: u64,
+    pub min_players: usize,
+    pub startup_webhook: Option<String>,
+    pub shutdown_webhook: Option<String>,
     pub offline_motd: Option<String>,
     pub offline_message: Option<String>,
 }

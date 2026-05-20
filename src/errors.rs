@@ -37,6 +37,10 @@ pub enum EnderError {
     /// The auto-wakeup command failed to execute.
     #[error("Auto-wakeup failed for {0}: {1}")]
     WakeupFailure(String, String),
+
+    /// The auto-shutdown command failed to execute.
+    #[error("Auto-shutdown failed for {0}: {1}")]
+    ShutdownFailure(String, String),
 }
 
 pub type Result<T> = StdResult<T, EnderError>;
