@@ -1,7 +1,6 @@
 use std::fmt;
 
-#[cfg(feature = "bedrock")]
-pub mod bedrock;
+
 #[cfg(feature = "java")]
 pub mod java;
 #[cfg(feature = "web")]
@@ -10,7 +9,7 @@ pub mod web;
 #[derive(Debug, Clone, Copy)]
 pub enum ProtocolKind {
     Java,
-    Bedrock,
+
     Web,
 }
 
@@ -31,16 +30,7 @@ impl ProtocolKind {
                     None
                 }
             }
-            Self::Bedrock => {
-                #[cfg(feature = "bedrock")]
-                {
-                    Some(Arc::new(bedrock::MinecraftBedrock))
-                }
-                #[cfg(not(feature = "bedrock"))]
-                {
-                    None
-                }
-            }
+
             Self::Web => {
                 #[cfg(feature = "web")]
                 {
@@ -59,7 +49,7 @@ impl fmt::Display for ProtocolKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             Self::Java => "Minecraft Java",
-            Self::Bedrock => "Minecraft Bedrock",
+
             Self::Web => "Web/HTTP",
         };
         write!(f, "{name}")
@@ -88,16 +78,7 @@ pub const PROTOCOLS: &[ProtocolMeta] = &[
         config_key: "minecraft_java",
         default_port: "127.0.0.1:25566",
     },
-    ProtocolMeta {
-        kind: ProtocolKind::Bedrock,
-        id: "minecraftbedrock",
-        aliases: &["minecraft_bedrock", "bedrock", "mcb"],
-        feature: "bedrock",
-        is_enabled: cfg!(feature = "bedrock"),
-        display_name: "Minecraft Bedrock",
-        config_key: "minecraft_bedrock",
-        default_port: "127.0.0.1:19132",
-    },
+
     ProtocolMeta {
         kind: ProtocolKind::Web,
         id: "http",

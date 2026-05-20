@@ -38,8 +38,7 @@ impl EnderDisplay {
 
         #[cfg(feature = "java")]
         features.push("Java");
-        #[cfg(feature = "bedrock")]
-        features.push("Bedrock");
+
         #[cfg(feature = "web")]
         features.push("Web");
 

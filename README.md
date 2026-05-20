@@ -1,6 +1,6 @@
 # Enderpearl [WORK IN PROGRESS]
 
-Enderpearl (ex. `mc-gate`) is a lightweight reverse proxy for Minecraft Java & Bedrock written in Rust and powered by [`refractium`](https://github.com/SirCesarium/refractium).
+Enderpearl (ex. `mc-gate`) is a lightweight reverse proxy for Minecraft Java written in Rust and powered by [`refractium`](https://github.com/SirCesarium/refractium).
 
 It allows to run Minecraft infrastructure in a **serverless** fashion by automatically managing server lifecycle based on network activity:
 
