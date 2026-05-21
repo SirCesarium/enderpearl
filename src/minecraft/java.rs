@@ -282,7 +282,7 @@ pub async fn get_player_count(target: &str) -> Result<usize> {
         .map_err(EnderError::Io)?;
 
     let (hostname, port) = if let Some((h, p)) = target.rsplit_once(':') {
-        let port: u16 = p.parse().map_err(|_| EnderError::Config("player count target".into(), format!("invalid port in '{target}'")))?;
+        let port: u16 = p.parse().map_err(|_| EnderError::Proxy(format!("invalid port in target '{target}'")))?;
         (h, port)
     } else {
         (target, 25565u16)
@@ -314,11 +314,23 @@ pub async fn get_player_count(target: &str) -> Result<usize> {
 ///
 /// Returns an error if the command cannot be spawned.
 pub fn execute_command(cmd: &str, _wait: bool) -> Result<()> {
-    Command::new("sh")
+    let mut child = Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .spawn()
         .map_err(EnderError::Io)?;
+
+    tokio::spawn(async move {
+        match child.wait().await {
+            Ok(status) => {
+                if !status.success() {
+                    tracing::warn!("Command exited with non-zero status: {status}");
+                }
+            }
+            Err(e) => tracing::error!("Failed to wait for command: {e}"),
+        }
+    });
+
     Ok(())
 }
 
@@ -382,7 +394,8 @@ mod tests {
 }
 
 fn send_webhook(url: &str, content: &str) {
-    let client = Client::new();
+    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
+    let client = CLIENT.get_or_init(Client::new);
     let body = json!({ "content": content });
     let url = url.to_string();
     tokio::spawn(async move {
