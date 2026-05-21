@@ -4,7 +4,7 @@ use crate::minecraft::varint::{decode_string, decode_varint, encode_mc_packet, e
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
@@ -313,17 +313,20 @@ pub async fn get_player_count(target: &str) -> Result<usize> {
 /// If `timeout_secs` > 0, waits for completion with that timeout.
 /// On timeout, sends SIGTERM then SIGKILL as escalation.
 ///
+/// If `timeout_secs` == 0, spawns the process in the background with
+/// stdin/stdout/stderr forwarded to the parent terminal.
+///
 /// # Errors
 ///
 /// Returns an error if the command cannot be spawned.
 pub async fn execute_command(cmd: &str, timeout_secs: u64) -> Result<()> {
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .spawn()
-        .map_err(EnderError::Io)?;
-
     if timeout_secs > 0 {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .spawn()
+            .map_err(EnderError::Io)?;
+
         match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
             Ok(Ok(status)) => {
                 if !status.success() {
@@ -348,11 +351,58 @@ pub async fn execute_command(cmd: &str, timeout_secs: u64) -> Result<()> {
             }
         }
     } else {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(EnderError::Io)?;
+
+        let child_stdin = child.stdin.take();
+        let child_stdout = child.stdout.take();
+        let child_stderr = child.stderr.take();
+
+        // Forward child stdout → tracing info
+        if let Some(out) = child_stdout {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(out);
+                let mut line = String::new();
+                while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+                    tracing::info!("[server] {}", line.trim_end());
+                    line.clear();
+                }
+            });
+        }
+
+        // Forward child stderr → tracing warn
+        if let Some(err) = child_stderr {
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(err);
+                let mut line = String::new();
+                while reader.read_line(&mut line).await.unwrap_or(0) > 0 {
+                    tracing::warn!("[server] {}", line.trim_end());
+                    line.clear();
+                }
+            });
+        }
+
+        // Forward parent stdin → child stdin
+        if let Some(child_in) = child_stdin {
+            tokio::spawn(async move {
+                let mut stdin = tokio::io::stdin();
+                let mut child_in = child_in;
+                let _ = tokio::io::copy(&mut stdin, &mut child_in).await;
+            });
+        }
+
+        // Wait for child exit in background
         tokio::spawn(async move {
             if let Ok(status) = child.wait().await
                 && !status.success()
             {
-                tracing::warn!("Startup command exited with non-zero status: {status}");
+                tracing::warn!("Server process exited with non-zero status: {status}");
             }
         });
     }
