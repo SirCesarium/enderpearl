@@ -21,7 +21,7 @@ os = "linux"
 arch = [ "x86_64" ]
 abi = "gnu"
 type = "bin"
-packages = ["bin", "tar.gz", "deb", "rpm"]
+packages = ["bin", "deb", "rpm"]
 
 # --- WINDOWS ---
 [[targets]]
@@ -31,7 +31,7 @@ os = "windows"
 arch = [ "x86_64" ]
 abi = "msvc"
 type = "bin"
-packages = ["bin", "zip", "msi"]
+packages = ["bin", "msi"]
 
 # --- MACOS ---
 [[targets]]
@@ -40,4 +40,4 @@ for = "enderpearl"
 os = "macos"
 arch = [ "arm64" ]
 type = "bin"
-packages = ["bin", "tar.gz"]
+packages = ["bin"]
