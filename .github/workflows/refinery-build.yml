@@ -197,6 +197,8 @@ jobs:
       contents: write
       packages: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
       - name: Download Artifacts
         uses: actions/download-artifact@v8
         with:
