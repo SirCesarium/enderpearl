@@ -40,6 +40,10 @@ pub struct JavaProxy {
 
 impl JavaProxy {
     /// Binds a TCP listener on `127.0.0.1:0` and spawns the accept loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the TCP listener cannot be bound.
     pub async fn serve(self: Arc<Self>) -> Result<u16> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let port = listener.local_addr()?.port();
@@ -86,37 +90,34 @@ impl JavaProxy {
                         Some(start) => {
                             if now.duration_since(start).as_secs() >= self.shutdown_timeout_secs {
                                 // Final check
-                                if let Ok(final_count) = get_player_count(&target).await {
-                                    if final_count <= self.min_players {
-                                        if let Some(ref handler) = self.handler {
-                                            if let Err(e) = handler.on_shutdown().await {
-                                                error!("Auto-shutdown handler failed: {e}");
-                                            } else {
-                                                tracing::info!("Auto-shutdown triggered successfully");
-                                                if let Some(ref url) = self.shutdown_webhook {
-                                                    let _ = send_webhook(url, &format!("Server shut down due to inactivity (players: {final_count})"));
-                                                }
+                                if let Ok(final_count) = get_player_count(&target).await
+                                    && final_count <= self.min_players
+                                {
+                                    if let Some(ref handler) = self.handler {
+                                        if let Err(e) = handler.on_shutdown().await {
+                                            error!("Auto-shutdown handler failed: {e}");
+                                        } else {
+                                            tracing::info!("Auto-shutdown triggered successfully");
+                                            if let Some(ref url) = self.shutdown_webhook {
+                                                send_webhook(url, &format!("Server shut down due to inactivity (players: {final_count})"));
                                             }
                                         }
-                                        empty_since = None;
                                     }
+                                    empty_since = None;
                                 }
                             }
                         }
                         None => empty_since = Some(now),
                     }
                 }
-                Ok(_) => empty_since = None,
-                Err(_) => empty_since = None,
+                Ok(_) | Err(_) => empty_since = None,
             }
         }
     }
 
     async fn handle_connection(self: Arc<Self>, mut stream: TcpStream) -> Result<()> {
-        if self.debug {
-            if let Ok(addr) = stream.peer_addr() {
-                tracing::info!("New Java connection from {}", addr);
-            }
+        if self.debug && let Ok(addr) = stream.peer_addr() {
+            tracing::info!("New Java connection from {}", addr);
         }
         let any_online = self.check_any_online().await;
 
@@ -140,7 +141,7 @@ impl JavaProxy {
             if timeout(Duration::from_millis(500), TcpStream::connect(target))
                 .await
                 .ok()
-                .and_then(|r| r.ok())
+                .and_then(std::result::Result::ok)
                 .is_some()
             {
                 return true;
@@ -150,14 +151,13 @@ impl JavaProxy {
     }
 
     async fn handle_status(&self, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
-        if matches!(self.startup_on, StartupOn::Ping | StartupOn::Always) {
-            if self.is_waking.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-                if let Some(ref handler) = self.handler {
-                    handler.on_startup().await?;
-                    if let Some(ref url) = self.startup_webhook {
-                        let _ = send_webhook(url, "Server starting up (triggered by Ping)");
-                    }
-                }
+        if matches!(self.startup_on, StartupOn::Ping | StartupOn::Always)
+            && self.is_waking.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+            && let Some(ref handler) = self.handler
+        {
+            handler.on_startup().await?;
+            if let Some(ref url) = self.startup_webhook {
+                send_webhook(url, "Server starting up (triggered by Ping)");
             }
         }
 
@@ -172,12 +172,12 @@ impl JavaProxy {
     }
 
     async fn handle_login(&self, stream: &mut TcpStream, _handshake: &Handshake) -> Result<()> {
-        if self.is_waking.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
-            if let Some(ref handler) = self.handler {
-                handler.on_startup().await?;
-                if let Some(ref url) = self.startup_webhook {
-                    let _ = send_webhook(url, "Server starting up (triggered by Join)");
-                }
+        if self.is_waking.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+            && let Some(ref handler) = self.handler
+        {
+            handler.on_startup().await?;
+            if let Some(ref url) = self.startup_webhook {
+                send_webhook(url, "Server starting up (triggered by Join)");
             }
         }
 
@@ -250,6 +250,11 @@ async fn proxy_to_backend(client: &mut TcpStream, targets: &[String], initial_pa
     Err(EnderError::Proxy("All targets unreachable".into()))
 }
 
+/// Fetches the online player count from a Minecraft server's status endpoint.
+///
+/// # Errors
+///
+/// Returns an error if the server is unreachable, returns invalid data, or the ping times out.
 pub async fn get_player_count(target: &str) -> Result<usize> {
     let mut stream = timeout(Duration::from_secs(2), TcpStream::connect(target))
         .await
@@ -274,10 +279,15 @@ pub async fn get_player_count(target: &str) -> Result<usize> {
     let json_str = decode_string(&response, &mut offset)?;
 
     let v: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| EnderError::PacketParse(format!("Invalid status JSON: {e}")))?;
-    let online = v["players"]["online"].as_u64().unwrap_or(0) as usize;
+    let online = usize::try_from(v["players"]["online"].as_u64().unwrap_or(0)).unwrap_or(0);
     Ok(online)
 }
 
+/// Executes a shell command.
+///
+/// # Errors
+///
+/// Returns an error if the command cannot be spawned.
 pub fn execute_command(cmd: &str, _wait: bool) -> Result<()> {
     let _child = Command::new("sh")
         .arg("-c")
@@ -287,12 +297,11 @@ pub fn execute_command(cmd: &str, _wait: bool) -> Result<()> {
     Ok(())
 }
 
-fn send_webhook(url: &str, content: &str) -> Result<()> {
+fn send_webhook(url: &str, content: &str) {
     let client = Client::new();
     let body = json!({ "content": content });
     let url = url.to_string();
     tokio::spawn(async move {
         let _ = client.post(url).json(&body).send().await;
     });
-    Ok(())
 }

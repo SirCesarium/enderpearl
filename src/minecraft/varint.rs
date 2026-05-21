@@ -6,6 +6,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 /// The `VarInt` format uses 7 bits per byte, with the high bit set
 /// to indicate that more bytes follow.
 #[must_use]
+#[allow(clippy::cast_sign_loss)]
 pub fn encode_varint(value: i32) -> Vec<u8> {
     let mut v = value as u32;
     let mut buf = Vec::with_capacity(5);
