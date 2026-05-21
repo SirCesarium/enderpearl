@@ -373,7 +373,7 @@ async fn wait_for_server_shutdown(target: &str, timeout_secs: u64) {
             tracing::warn!("Server didn't shut down after {timeout_secs}s, force killing port {port}");
             let _ = Command::new("sh")
                 .arg("-c")
-                .arg(format!("fuser -k {port}/tcp"))
+                .arg(format!("kill -9 $(lsof -ti :{port} -sTCP:LISTEN) 2>/dev/null"))
                 .spawn();
             // Wait a moment for the kill to take effect
             tokio::time::sleep(Duration::from_secs(2)).await;
