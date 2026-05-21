@@ -49,6 +49,10 @@ cli = ["dep:clap", "dep:toml", "dep:inquire"]
 pretty-cli = ["cli", "dep:indicatif", "dep:owo-colors"]
 logging = ["dep:tracing", "dep:tracing-subscriber"]
 
+[lib]
+name = "enderpearl"
+path = "src/lib.rs"
+
 [[bin]]
 name = "enderpearl"
 path = "src/main.rs"
