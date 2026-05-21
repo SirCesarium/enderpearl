@@ -36,6 +36,7 @@ async fn main() {
 struct ShellLifecycleHandler {
     startup_cmd: Option<String>,
     shutdown_cmd: Option<String>,
+    shutdown_timeout_secs: u64,
 }
 
 impl LifecycleHandler for ShellLifecycleHandler {
@@ -43,7 +44,7 @@ impl LifecycleHandler for ShellLifecycleHandler {
         let cmd = self.startup_cmd.clone();
         Box::pin(async move {
             if let Some(c) = cmd {
-                enderpearl::minecraft::java::execute_command(&c, false)?;
+                enderpearl::minecraft::java::execute_command(&c, 0).await?;
             }
             Ok(())
         })
@@ -51,9 +52,10 @@ impl LifecycleHandler for ShellLifecycleHandler {
 
     fn on_shutdown(&self) -> AsyncResultFuture {
         let cmd = self.shutdown_cmd.clone();
+        let timeout = self.shutdown_timeout_secs;
         Box::pin(async move {
             if let Some(c) = cmd {
-                enderpearl::minecraft::java::execute_command(&c, true)?;
+                enderpearl::minecraft::java::execute_command(&c, timeout).await?;
             }
             Ok(())
         })
@@ -105,6 +107,7 @@ async fn run() -> anyhow::Result<()> {
             route.handler = Some(Arc::new(ShellLifecycleHandler {
                 startup_cmd: toml_route.startup_cmd.clone(),
                 shutdown_cmd: toml_route.shutdown_cmd.clone(),
+                shutdown_timeout_secs: route.shutdown_timeout_secs,
             }));
         }
     }
