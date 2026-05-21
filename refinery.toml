@@ -30,3 +30,24 @@ strip = true
 lto = true
 codegenUnits = 1
 panic = "abort"
+
+[[publish]]
+type = "builtin"
+builtin = "download_artifact"
+
+[[publish]]
+type = "builtin"
+builtin = "github_release"
+
+[[publish]]
+type = "composite"
+name = "Publish Docker to GHCR"
+action = "docker-publish"
+with = { image_name = "sircesarium/enderpearl" }
+permissions = { packages = "write" }
+
+# [[publish]]
+# type = "composite"
+# name = "Publish to Crates.io"
+# action = "cargo-publish"
+# secrets = ["CRATES_TOKEN"]
