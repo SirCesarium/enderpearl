@@ -2,52 +2,42 @@ version = 1
 platform = "github"
 lang = "rust"
 
-[[artifacts]]
-type = "bin"
-name = "enderpearl"
-outputName = "{name}-{os}"
-
-[[targets]]
-id = "linux"
-for = "enderpearl"
-os = "linux"
-arch = [ "x86_64" ]
-abi = "musl"
-packages = [ "bin" ]
-type = "bin"
-
-[[targets]]
-id = "windows"
-for = "enderpearl"
-os = "windows"
-arch = [ "x86_64" ]
-abi = "msvc"
-packages = [ "bin" ]
-type = "bin"
-
 [release]
 strip = true
 lto = true
 codegenUnits = 1
 panic = "abort"
 
-[[publish]]
-type = "builtin"
-builtin = "download_artifact"
+[[artifacts]]
+type = "bin"
+name = "enderpearl"
+outputName = "{name}-{os}-{arch}-{abi}"
 
-[[publish]]
-type = "builtin"
-builtin = "github_release"
+# --- LINUX ---
+[[targets]]
+id = "linux-gnu-x64"
+for = "enderpearl"
+os = "linux"
+arch = [ "x86_64" ]
+abi = "gnu"
+type = "bin"
+packages = ["bin", "tar.gz", "deb", "rpm"]
 
-[[publish]]
-type = "composite"
-name = "Publish Docker to GHCR"
-action = "docker-publish"
-with = { image_name = "sircesarium/enderpearl" }
-permissions = { packages = "write" }
+# --- WINDOWS ---
+[[targets]]
+id = "windows-msvc-x64"
+for = "enderpearl"
+os = "windows"
+arch = [ "x86_64" ]
+abi = "msvc"
+type = "bin"
+packages = ["bin", "zip", "msi"]
 
-# [[publish]]
-# type = "composite"
-# name = "Publish to Crates.io"
-# action = "cargo-publish"
-# secrets = ["CRATES_TOKEN"]
+# --- MACOS ---
+[[targets]]
+id = "macos-arm64"
+for = "enderpearl"
+os = "macos"
+arch = [ "arm64" ]
+type = "bin"
+packages = ["bin", "tar.gz"]
