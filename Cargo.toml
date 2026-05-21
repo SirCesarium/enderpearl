@@ -19,7 +19,7 @@ refractium = { version = "3", default-features = false, features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "process"] }
+tokio = { version = "1", features = ["macros", "process", "io-std", "io-util"] }
 clap = { version = "4.5", features = ["derive"], optional = true }
 indicatif = { version = "0.18", optional = true }
 owo-colors = { version = "4", optional = true }
