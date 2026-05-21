@@ -91,23 +91,23 @@ impl JavaProxy {
                     let now = tokio::time::Instant::now();
                     match empty_since {
                         Some(start) => {
-                            if now.duration_since(start).as_secs() >= self.shutdown_timeout_secs {
-                                // Final check
-                                if let Ok(final_count) = get_player_count(&target).await
-                                    && final_count <= self.min_players
-                                {
-                                    if let Some(ref handler) = self.handler {
-                                        if let Err(e) = handler.on_shutdown().await {
-                                            tracing::error!("Auto-shutdown handler failed: {e}");
-                                        } else {
-                                            tracing::info!("Auto-shutdown triggered successfully");
-                                            if let Some(ref url) = self.shutdown_webhook {
-                                                send_webhook(url, &format!("Server shut down due to inactivity (players: {final_count})"));
-                                            }
-                                        }
+                            if now.duration_since(start).as_secs() >= self.shutdown_timeout_secs
+                                && let Ok(final_count) = get_player_count(&target).await
+                                && final_count <= self.min_players
+                            {
+                                if let Some(ref handler) = self.handler {
+                                    tracing::info!("Shutting down idle server (no players for {}s)", self.shutdown_timeout_secs);
+                                    if let Err(e) = handler.on_shutdown().await {
+                                        tracing::error!("Shutdown command failed: {e}");
                                     }
-                                    empty_since = None;
                                 }
+
+                                if let Some(ref url) = self.shutdown_webhook {
+                                    send_webhook(url, "Server shut down due to inactivity");
+                                }
+
+                                wait_for_server_shutdown(&target, self.shutdown_timeout_secs).await;
+                                empty_since = None;
                             }
                         }
                         None => empty_since = Some(now),
@@ -310,28 +310,85 @@ pub async fn get_player_count(target: &str) -> Result<usize> {
 
 /// Executes a shell command.
 ///
+/// If `timeout_secs` > 0, waits for completion with that timeout.
+/// On timeout, sends SIGTERM then SIGKILL as escalation.
+///
 /// # Errors
 ///
 /// Returns an error if the command cannot be spawned.
-pub fn execute_command(cmd: &str, _wait: bool) -> Result<()> {
+pub async fn execute_command(cmd: &str, timeout_secs: u64) -> Result<()> {
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .spawn()
         .map_err(EnderError::Io)?;
 
-    tokio::spawn(async move {
-        match child.wait().await {
-            Ok(status) => {
+    if timeout_secs > 0 {
+        match timeout(Duration::from_secs(timeout_secs), child.wait()).await {
+            Ok(Ok(status)) => {
                 if !status.success() {
-                    tracing::warn!("Command exited with non-zero status: {status}");
+                    tracing::warn!("Shutdown command exited with non-zero status: {status}");
                 }
             }
-            Err(e) => tracing::error!("Failed to wait for command: {e}"),
+            Ok(Err(e)) => {
+                tracing::error!("Failed to wait for shutdown command: {e}");
+            }
+            Err(_) => {
+                tracing::warn!("Shutdown command timed out after {timeout_secs}s, sending SIGTERM");
+                let _ = child.start_kill();
+                if timeout(Duration::from_secs(10), child.wait())
+                    .await
+                    .ok()
+                    .and_then(std::result::Result::ok)
+                    .is_none()
+                {
+                    tracing::warn!("Process still alive after SIGTERM, sending SIGKILL");
+                    let _ = child.kill().await;
+                }
+            }
         }
-    });
+    } else {
+        tokio::spawn(async move {
+            if let Ok(status) = child.wait().await
+                && !status.success()
+            {
+                tracing::warn!("Startup command exited with non-zero status: {status}");
+            }
+        });
+    }
 
     Ok(())
+}
+
+fn target_port_only(target: &str) -> u16 {
+    target.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(25565)
+}
+
+async fn wait_for_server_shutdown(target: &str, timeout_secs: u64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        if tokio::time::Instant::now() >= deadline {
+            let port = target_port_only(target);
+            tracing::warn!("Server didn't shut down after {timeout_secs}s, force killing port {port}");
+            let _ = Command::new("sh")
+                .arg("-c")
+                .arg(format!("fuser -k {port}/tcp"))
+                .spawn();
+            // Wait a moment for the kill to take effect
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            return;
+        }
+        if timeout(Duration::from_secs(2), TcpStream::connect(target))
+            .await
+            .ok()
+            .and_then(std::result::Result::ok)
+            .is_none()
+        {
+            tracing::info!("Server shut down gracefully");
+            return;
+        }
+    }
 }
 
 #[cfg(test)]
