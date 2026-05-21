@@ -99,13 +99,13 @@ async fn run() -> anyhow::Result<()> {
 
     // Inject shell handlers from TOML into the agnostic config
     for (name, toml_route) in &toml_config.upstream {
-        if let Some(route) = config.upstreams.iter_mut().find(|r| r.protocol.name() == *name || name == "minecraft_java") {
-            if toml_route.startup_cmd.is_some() || toml_route.shutdown_cmd.is_some() {
-                route.handler = Some(Arc::new(ShellLifecycleHandler {
-                    startup_cmd: toml_route.startup_cmd.clone(),
-                    shutdown_cmd: toml_route.shutdown_cmd.clone(),
-                }));
-            }
+        if let Some(route) = config.upstreams.iter_mut().find(|r| r.protocol.name() == *name || name == "minecraft_java")
+            && (toml_route.startup_cmd.is_some() || toml_route.shutdown_cmd.is_some())
+        {
+            route.handler = Some(Arc::new(ShellLifecycleHandler {
+                startup_cmd: toml_route.startup_cmd.clone(),
+                shutdown_cmd: toml_route.shutdown_cmd.clone(),
+            }));
         }
     }
 
