@@ -20,6 +20,7 @@ jobs:
       matrix:
         include:
           - artifact: enderpearl
+            artifact_type: bin
             os: linux
             arch: x86_64
             runs_on: ubuntu-latest
@@ -40,8 +41,10 @@ jobs:
             apt_packages:
               - rpm
             bin_ext: ""
+            headers: false
             abi: gnu
           - artifact: enderpearl
+            artifact_type: bin
             os: windows
             arch: x86_64
             runs_on: windows-latest
@@ -60,8 +63,10 @@ jobs:
             include_files: []
             apt_packages: []
             bin_ext: .exe
+            headers: false
             abi: msvc
           - artifact: enderpearl
+            artifact_type: bin
             os: macos
             arch: arm64
             runs_on: macos-latest
@@ -79,6 +84,7 @@ jobs:
             include_files: []
             apt_packages: []
             bin_ext: ""
+            headers: false
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -118,6 +124,7 @@ jobs:
         run: cargo build --release --target ${{ matrix.target_triple }}
         shell: bash
       - name: Prepare Binary
+        if: matrix.artifact_type == 'bin'
         run: |-
           SRC="target/${{ matrix.target_triple }}/release/${{ matrix.artifact_bin }}${{ matrix.bin_ext }}"
           DST_ORIG="target/release/${{ matrix.artifact_bin }}${{ matrix.bin_ext }}"
@@ -126,6 +133,43 @@ jobs:
           mkdir -p target/release
           cp "$SRC" "$DST_ORIG"
           cp "$SRC" "$DST_RENAMED"
+        shell: bash
+      - name: Prepare Library
+        if: matrix.artifact_type == 'lib'
+        run: |-
+          SRCDIR="target/${{ matrix.target_triple }}/release"
+          DSTDIR="target/release"
+          mkdir -p "$DSTDIR"
+
+          copy_lib() {
+            local src_file="$1"
+            local dst_orig_file="$2"
+            local dst_renamed_file="$3"
+            if [ -f "$src_file" ]; then
+              cp "$src_file" "$DSTDIR/$dst_orig_file"
+              cp "$src_file" "$DSTDIR/$dst_renamed_file"
+            fi
+          }
+
+          NAME="${{ matrix.artifact_bin }}"
+          OUT="${{ matrix.output_name }}"
+
+          copy_lib "$SRCDIR/lib${NAME}.so" "lib${NAME}.so" "lib${OUT}.so"
+          copy_lib "$SRCDIR/lib${NAME}.dylib" "lib${NAME}.dylib" "lib${OUT}.dylib"
+          copy_lib "$SRCDIR/lib${NAME}.a" "lib${NAME}.a" "lib${OUT}.a"
+          copy_lib "$SRCDIR/${NAME}.dll" "${NAME}.dll" "${OUT}.dll"
+          copy_lib "$SRCDIR/${NAME}.lib" "${NAME}.lib" "${OUT}.lib"
+          copy_lib "$SRCDIR/lib${NAME}.dll.a" "lib${NAME}.dll.a" "lib${OUT}.dll.a"
+          copy_lib "$SRCDIR/${NAME}.wasm" "${NAME}.wasm" "${OUT}.wasm"
+
+          if [ "${{ matrix.headers }}" = "true" ]; then
+            if [ -f "cbindgen.toml" ]; then
+              cbindgen --config cbindgen.toml --crate "${NAME}" --output "$DSTDIR/${OUT}.h"
+            else
+              cbindgen --crate "${NAME}" --output "$DSTDIR/${OUT}.h"
+            fi
+            cp "$DSTDIR/${OUT}.h" "$DSTDIR/${NAME}.h"
+          fi
         shell: bash
       - name: Copy Extra Files
         if: ${{ matrix.include_files[0] }}
@@ -177,13 +221,20 @@ jobs:
           if ($msi) { Rename-Item -Path $msi.FullName -NewName "${{ matrix.output_name }}.msi" }
         shell: pwsh
       - name: Export Binary
-        if: ${{ matrix.has_bin }}
+        if: (matrix.has_bin) && (matrix.artifact_type == 'bin')
         run: |-
           mkdir -p _packages
           cp "target/release/${{ matrix.output_name }}${{ matrix.bin_ext }}" "_packages/"
         shell: bash
-      - name: Package
-        if: ${{ matrix.has_archive }}
+      - name: Export Library
+        if: (matrix.has_bin) && (matrix.artifact_type == 'lib')
+        run: |-
+          mkdir -p _packages
+          cp target/release/lib${{ matrix.output_name }}.* _packages/ 2>/dev/null || true
+          cp target/release/${{ matrix.output_name }}.* _packages/ 2>/dev/null || true
+        shell: bash
+      - name: Package Binary
+        if: (matrix.has_archive) && (matrix.artifact_type == 'bin')
         run: |-
           ARCHIVE_DIR="${PWD}/_packages"
           mkdir -p "$ARCHIVE_DIR"
@@ -196,6 +247,26 @@ jobs:
             fi
           done
 
+          if [ "${{ matrix.package_type }}" = "zip" ]; then
+            (cd "$STAGING_DIR" && 7z a -tzip "$ARCHIVE_DIR/${{ matrix.output_name }}.zip" .) > /dev/null
+          else
+            tar -czf "$ARCHIVE_DIR/${{ matrix.output_name }}.tar.gz" -C "$STAGING_DIR" .
+          fi
+        shell: bash
+      - name: Package Library
+        if: (matrix.has_archive) && (matrix.artifact_type == 'lib')
+        run: |-
+          ARCHIVE_DIR="${PWD}/_packages"
+          mkdir -p "$ARCHIVE_DIR"
+          STAGING_DIR="target/archive_staging/${{ matrix.output_name }}"
+          mkdir -p "$STAGING_DIR"
+          cp target/release/lib${{ matrix.artifact_bin }}.* "$STAGING_DIR/" 2>/dev/null || true
+          cp target/release/${{ matrix.artifact_bin }}.* "$STAGING_DIR/" 2>/dev/null || true
+          for f in ${{ join(matrix.include_files, ' ') }}; do
+            if [ -f "$f" ]; then
+              cp "$f" "$STAGING_DIR/"
+            fi
+          done
           if [ "${{ matrix.package_type }}" = "zip" ]; then
             (cd "$STAGING_DIR" && 7z a -tzip "$ARCHIVE_DIR/${{ matrix.output_name }}.zip" .) > /dev/null
           else
