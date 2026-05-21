@@ -110,3 +110,84 @@ pub fn decode_string(data: &[u8], offset: &mut usize) -> Result<String> {
     *offset += len;
     Ok(s)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_varint_zero() {
+        assert_eq!(encode_varint(0), &[0x00]);
+    }
+
+    #[test]
+    fn encode_varint_single_byte() {
+        assert_eq!(encode_varint(127), &[0x7f]);
+    }
+
+    #[test]
+    fn encode_varint_two_bytes() {
+        assert_eq!(encode_varint(128), &[0x80, 0x01]);
+    }
+
+    #[test]
+    fn encode_varint_max() {
+        // -1 as VarInt = 0xFFFFFFFF -> [0xff, 0xff, 0xff, 0xff, 0x0f]
+        assert_eq!(encode_varint(-1), &[0xff, 0xff, 0xff, 0xff, 0x0f]);
+    }
+
+    #[test]
+    fn decode_varint_single_byte() {
+        let data = [0x7f];
+        let mut offset = 0;
+        assert_eq!(decode_varint(&data, &mut offset).unwrap(), 127);
+        assert_eq!(offset, 1);
+    }
+
+    #[test]
+    fn decode_varint_two_bytes() {
+        let data = [0x80, 0x01];
+        let mut offset = 0;
+        assert_eq!(decode_varint(&data, &mut offset).unwrap(), 128);
+        assert_eq!(offset, 2);
+    }
+
+    #[test]
+    fn decode_varint_negative() {
+        let data = [0xff, 0xff, 0xff, 0xff, 0x0f];
+        let mut offset = 0;
+        assert_eq!(decode_varint(&data, &mut offset).unwrap(), -1);
+        assert_eq!(offset, 5);
+    }
+
+    #[test]
+    fn decode_varint_truncated() {
+        let data = [0x80];
+        let mut offset = 0;
+        assert!(decode_varint(&data, &mut offset).is_err());
+    }
+
+    #[test]
+    fn encode_mc_packet_roundtrip() {
+        let payload = b"hello";
+        let packet = encode_mc_packet(payload).unwrap();
+        // length prefix (varint 5) + payload
+        assert_eq!(packet, &[0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f]);
+    }
+
+    #[test]
+    fn decode_string_valid() {
+        // VarInt(5) + "hello"
+        let data = [0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f];
+        let mut offset = 0;
+        assert_eq!(decode_string(&data, &mut offset).unwrap(), "hello");
+        assert_eq!(offset, 6);
+    }
+
+    #[test]
+    fn decode_string_truncated() {
+        let data = [0x05, 0x68, 0x65];
+        let mut offset = 0;
+        assert!(decode_string(&data, &mut offset).is_err());
+    }
+}
