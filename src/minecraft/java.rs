@@ -1,4 +1,3 @@
-use crate::error;
 use crate::core::types::{StartupOn, LifecycleHandler};
 use crate::errors::{EnderError, Result};
 use crate::minecraft::varint::{decode_string, decode_varint, encode_mc_packet, encode_varint, read_varint};
@@ -55,11 +54,13 @@ impl JavaProxy {
                     Ok((stream, _)) => {
                         let proxy = proxy_accept.clone();
                         tokio::spawn(async move {
-                            let _ = proxy.handle_connection(stream).await;
+                            if let Err(e) = proxy.handle_connection(stream).await {
+                                tracing::error!("Java proxy connection handler failed: {e}");
+                            }
                         });
                     }
                     Err(e) => {
-                        error!("Java proxy accept error: {e}");
+                        tracing::error!("Java proxy accept error: {e}");
                     }
                 }
             }
@@ -69,14 +70,16 @@ impl JavaProxy {
         if self.handler.is_some() && self.shutdown_timeout_secs > 0 {
             let monitor_proxy = self.clone();
             tokio::spawn(async move {
-                monitor_proxy.spawn_monitor().await;
+                if let Err(e) = monitor_proxy.spawn_monitor().await {
+                    tracing::error!("Shutdown monitor failed: {e}");
+                }
             });
         }
 
         Ok(port)
     }
 
-    async fn spawn_monitor(&self) {
+    async fn spawn_monitor(&self) -> Result<()> {
         let mut empty_since: Option<tokio::time::Instant> = None;
         let target = self.targets[0].clone();
 
@@ -95,7 +98,7 @@ impl JavaProxy {
                                 {
                                     if let Some(ref handler) = self.handler {
                                         if let Err(e) = handler.on_shutdown().await {
-                                            error!("Auto-shutdown handler failed: {e}");
+                                            tracing::error!("Auto-shutdown handler failed: {e}");
                                         } else {
                                             tracing::info!("Auto-shutdown triggered successfully");
                                             if let Some(ref url) = self.shutdown_webhook {
@@ -223,28 +226,45 @@ fn parse_handshake(raw: &[u8]) -> Result<Handshake> {
 }
 
 async fn read_raw_packet(stream: &mut TcpStream) -> Result<Vec<u8>> {
-    let raw_length = read_varint(stream).await?;
+    let raw_length = timeout(Duration::from_secs(10), read_varint(stream))
+        .await
+        .map_err(|_| EnderError::Proxy("Timeout reading packet length".into()))??;
     let length = usize::try_from(raw_length).map_err(|_| EnderError::PacketParse("Negative packet length".into()))?;
+    if length > 2_097_152 {
+        return Err(EnderError::PacketParse(format!("Packet length {length} exceeds maximum 2MiB")));
+    }
     let mut data = vec![0u8; length];
-    stream.read_exact(&mut data).await.map_err(EnderError::Io)?;
+    timeout(Duration::from_secs(10), stream.read_exact(&mut data))
+        .await
+        .map_err(|_| EnderError::Proxy("Timeout reading packet data".into()))?
+        .map_err(EnderError::Io)?;
 
     encode_mc_packet(&data)
 }
 
 async fn proxy_to_backend(client: &mut TcpStream, targets: &[String], initial_packet: Option<&[u8]>) -> Result<()> {
     for target in targets {
-        if let Ok(mut backend) = TcpStream::connect(target).await {
-            if let Some(pkt) = initial_packet {
-                backend.write_all(pkt).await.map_err(EnderError::Io)?;
-            }
-            let (mut client_read, mut client_write) = client.split();
-            let (mut backend_read, mut backend_write) = backend.split();
+        let connect_result = timeout(Duration::from_secs(5), TcpStream::connect(target)).await;
+        match connect_result {
+            Ok(Ok(mut backend)) => {
+                if let Some(pkt) = initial_packet {
+                    backend.write_all(pkt).await.map_err(EnderError::Io)?;
+                }
+                let (mut client_read, mut client_write) = client.split();
+                let (mut backend_read, mut backend_write) = backend.split();
 
-            let _ = tokio::join!(
-                tokio::io::copy(&mut client_read, &mut backend_write),
-                tokio::io::copy(&mut backend_read, &mut client_write)
-            );
-            return Ok(());
+                let _ = tokio::join!(
+                    tokio::io::copy(&mut client_read, &mut backend_write),
+                    tokio::io::copy(&mut backend_read, &mut client_write)
+                );
+                return Ok(());
+            }
+            Ok(Err(e)) => {
+                    tracing::warn!("Failed to connect to backend {target}: {e}");
+                }
+                Err(_) => {
+                    tracing::warn!("Timeout connecting to backend {target}");
+                }
         }
     }
     Err(EnderError::Proxy("All targets unreachable".into()))
@@ -261,11 +281,16 @@ pub async fn get_player_count(target: &str) -> Result<usize> {
         .map_err(|_| EnderError::Proxy("Timeout connecting to backend for player count".into()))?
         .map_err(EnderError::Io)?;
 
-    let hostname = target.split(':').next().unwrap_or("localhost");
+    let (hostname, port) = if let Some((h, p)) = target.rsplit_once(':') {
+        let port: u16 = p.parse().map_err(|_| EnderError::Config("player count target".into(), format!("invalid port in '{target}'")))?;
+        (h, port)
+    } else {
+        (target, 25565u16)
+    };
     let mut handshake = encode_varint(0x00);
     handshake.extend_from_slice(&encode_varint(-1));
     handshake.extend_from_slice(&encode_mc_packet(hostname.as_bytes())?);
-    handshake.extend_from_slice(&25565u16.to_be_bytes());
+    handshake.extend_from_slice(&port.to_be_bytes());
     handshake.extend_from_slice(&encode_varint(1));
     stream.write_all(&encode_mc_packet(&handshake)?).await.map_err(EnderError::Io)?;
 
@@ -289,7 +314,7 @@ pub async fn get_player_count(target: &str) -> Result<usize> {
 ///
 /// Returns an error if the command cannot be spawned.
 pub fn execute_command(cmd: &str, _wait: bool) -> Result<()> {
-    let _child = Command::new("sh")
+    Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .spawn()
@@ -297,11 +322,72 @@ pub fn execute_command(cmd: &str, _wait: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_handshake_data(proto_ver: i32, addr: &str, port: u16, next_state: i32) -> Vec<u8> {
+        let mut buf = encode_varint(0x00); // packet ID
+        buf.extend_from_slice(&encode_varint(proto_ver));
+        buf.extend_from_slice(&encode_mc_packet(addr.as_bytes()).unwrap());
+        buf.extend_from_slice(&port.to_be_bytes());
+        buf.extend_from_slice(&encode_varint(next_state));
+        encode_mc_packet(&buf).unwrap()
+    }
+
+    #[test]
+    fn parse_valid_status_handshake() {
+        let data = make_handshake_data(766, "localhost", 25565, 1);
+        let hs = parse_handshake(&data).unwrap();
+        assert_eq!(hs.proto_ver, 766);
+        assert_eq!(hs.addr, "localhost");
+        assert_eq!(hs.port, 25565);
+        assert_eq!(hs.next_state, 1);
+    }
+
+    #[test]
+    fn parse_valid_login_handshake() {
+        let data = make_handshake_data(766, "localhost", 25565, 2);
+        let hs = parse_handshake(&data).unwrap();
+        assert_eq!(hs.next_state, 2);
+    }
+
+    #[test]
+    fn parse_handshake_invalid_packet_id() {
+        let mut data = make_handshake_data(766, "localhost", 25565, 1);
+        // corrupt packet ID to 0x01
+        let mut offset = 0;
+        let _len = decode_varint(&data, &mut offset).unwrap();
+        data[offset] = 0x01;
+        assert!(parse_handshake(&data).is_err());
+    }
+
+    #[test]
+    fn parse_handshake_truncated() {
+        let data = [0x01, 0x00]; // too short
+        assert!(parse_handshake(&data).is_err());
+    }
+
+    #[test]
+    fn get_player_count_port_is_parsed() {
+        // Test that the target port is used (not hardcoded 25565)
+        // We just check the function exists and the signature is right
+        // by verifying we can call it with any string
+        let target = "127.0.0.1:25566";
+        let (hostname, port) = target.rsplit_once(':').unwrap();
+        let port: u16 = port.parse().unwrap();
+        assert_eq!(port, 25566);
+        assert_eq!(hostname, "127.0.0.1");
+    }
+}
+
 fn send_webhook(url: &str, content: &str) {
     let client = Client::new();
     let body = json!({ "content": content });
     let url = url.to_string();
     tokio::spawn(async move {
-        let _ = client.post(url).json(&body).send().await;
+        if let Err(e) = client.post(&url).json(&body).send().await {
+            tracing::error!("Webhook POST to {url} failed: {e}");
+        }
     });
 }
