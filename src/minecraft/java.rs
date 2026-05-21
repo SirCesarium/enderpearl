@@ -55,7 +55,7 @@ impl JavaProxy {
                         let proxy = proxy_accept.clone();
                         tokio::spawn(async move {
                             if let Err(e) = proxy.handle_connection(stream).await {
-                                tracing::error!("Java proxy connection handler failed: {e}");
+                                tracing::debug!("Java proxy connection handler failed: {e}");
                             }
                         });
                     }
