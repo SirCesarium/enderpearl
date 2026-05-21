@@ -6,4 +6,4 @@ RUN cargo build --release
 FROM debian:trixie
 WORKDIR /app
 COPY --from=builder /app/target/release/enderpearl .
-ENTRYPOINT ["./mcg"]
+ENTRYPOINT ["./enderpearl"]
