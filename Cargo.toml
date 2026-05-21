@@ -58,6 +58,19 @@ name = "enderpearl"
 path = "src/main.rs"
 required-features = ["cli"]
 
+[package.metadata.deb]
+maintainer = "SirCesarium"
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/enderpearl", "usr/bin/", "755"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/enderpearl", dest = "/usr/bin/enderpearl", mode = "755" },
+]
+
 [lints.clippy]
 all = "deny"
 pedantic = "deny"
