@@ -23,7 +23,7 @@ jobs:
             artifact_type: bin
             os: linux
             arch: x86_64
-            runs_on: ubuntu-latest
+            runs_on: ubuntu-24.04
             output_name: enderpearl-linux-x86_64-gnu
             artifact_bin: enderpearl
             target_triple: x86_64-unknown-linux-gnu
@@ -42,16 +42,17 @@ jobs:
               - rpm
             bin_ext: ""
             headers: false
+            linker_env: []
             abi: gnu
           - artifact: enderpearl
             artifact_type: bin
             os: windows
             arch: x86_64
-            runs_on: windows-latest
+            runs_on: windows-2025
             output_name: enderpearl-windows-x86_64-msvc
             artifact_bin: enderpearl
             target_triple: x86_64-pc-windows-msvc
-            package_type: tar.gz
+            package_type: zip
             packages:
               - bin
               - msi
@@ -64,12 +65,13 @@ jobs:
             apt_packages: []
             bin_ext: .exe
             headers: false
+            linker_env: []
             abi: msvc
           - artifact: enderpearl
             artifact_type: bin
             os: macos
             arch: arm64
-            runs_on: macos-latest
+            runs_on: macos-26
             output_name: enderpearl-macos-arm64
             artifact_bin: enderpearl
             target_triple: aarch64-apple-darwin
@@ -85,6 +87,7 @@ jobs:
             apt_packages: []
             bin_ext: ""
             headers: false
+            linker_env: []
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -93,11 +96,26 @@ jobs:
         with:
           target: ${{ matrix.target_triple }}
           cache: true
-      - name: Setup Linker
-        uses: MechanicalLabs/refinery/setup-linker@v0
+          toolchain: stable
+      - name: Install cbindgen
+        uses: taiki-e/install-action@v2
+        if: matrix.headers == true
         with:
-          target-triple: ${{ matrix.target_triple }}
-          extra-apt-packages: ${{ join(matrix.apt_packages, ' ') }}
+          tool: cbindgen
+      - name: Configure Linker and System Dependencies
+        if: matrix.apt_packages[0] != null || matrix.linker_env[0] != null
+        run: |-
+          PKGS="${{ join(matrix.apt_packages, ' ') }}"
+          if [ -n "$PKGS" ] && [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install --no-install-recommends -y $PKGS
+          fi
+
+          for env_var in "${{ join(matrix.linker_env, '" "') }}"; do
+            if [ -n "$env_var" ]; then
+              echo "$env_var" >> "$GITHUB_ENV"
+            fi
+          done
+        shell: bash
       - name: Install System Dependencies (Windows) [WiX]
         if: runner.os == 'Windows' && matrix.has_msi
         run: >-
@@ -123,19 +141,7 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target_triple }}
         shell: bash
-      - name: Prepare Binary
-        if: matrix.artifact_type == 'bin'
-        run: |-
-          SRC="target/${{ matrix.target_triple }}/release/${{ matrix.artifact_bin }}${{ matrix.bin_ext }}"
-          DST_ORIG="target/release/${{ matrix.artifact_bin }}${{ matrix.bin_ext }}"
-          DST_RENAMED="target/release/${{ matrix.output_name }}${{ matrix.bin_ext }}"
-
-          mkdir -p target/release
-          cp "$SRC" "$DST_ORIG"
-          cp "$SRC" "$DST_RENAMED"
-        shell: bash
       - name: Prepare Library
-        if: matrix.artifact_type == 'lib'
         run: |-
           SRCDIR="target/${{ matrix.target_triple }}/release"
           DSTDIR="target/release"
@@ -172,7 +178,6 @@ jobs:
           fi
         shell: bash
       - name: Copy Extra Files
-        if: ${{ matrix.include_files[0] }}
         run: |-
           for f in ${{ join(matrix.include_files, ' ') }}; do
             if [ -f "$f" ]; then
@@ -180,61 +185,20 @@ jobs:
             fi
           done
         shell: bash
-      - name: Install cargo-deb
-        if: ${{ matrix.has_deb }}
-        uses: MechanicalLabs/refinery/install-packager@v0
-        with:
-          tool: cargo-deb
-      - name: Build .deb package
-        if: ${{ matrix.has_deb }}
-        run: |-
-          mkdir -p _packages
-          cargo deb --target ${{ matrix.target_triple }} --no-build -o _packages/
-          for f in _packages/*.deb; do
-            [ -f "$f" ] && mv "$f" "_packages/${{ matrix.output_name }}.deb"
-          done
-        shell: bash
-      - name: Install cargo-generate-rpm
-        if: ${{ matrix.has_rpm }}
-        run: cargo install cargo-generate-rpm
-        shell: bash
-      - name: Build .rpm package
-        if: ${{ matrix.has_rpm }}
-        run: |-
-          mkdir -p _packages
-          cargo generate-rpm -o _packages/
-          for f in _packages/*.rpm; do
-            [ -f "$f" ] && mv "$f" "_packages/${{ matrix.output_name }}.rpm"
-          done
-        shell: bash
-      - name: Install cargo-wix
-        if: ${{ matrix.has_msi }}
-        uses: MechanicalLabs/refinery/install-packager@v0
-        with:
-          tool: cargo-wix
-      - name: Build .msi package
-        if: ${{ matrix.has_msi }}
-        run: |-
-          mkdir -p _packages
-          cargo wix --target ${{ matrix.target_triple }} -o _packages/
-          $msi = Get-ChildItem "_packages\*.msi" | Select-Object -First 1
-          if ($msi) { Rename-Item -Path $msi.FullName -NewName "${{ matrix.output_name }}.msi" }
-        shell: pwsh
       - name: Export Binary
-        if: (matrix.has_bin) && (matrix.artifact_type == 'bin')
         run: |-
           mkdir -p _packages
           cp "target/release/${{ matrix.output_name }}${{ matrix.bin_ext }}" "_packages/"
         shell: bash
+        if: matrix.artifact_type == 'bin'
       - name: Export Library
-        if: (matrix.has_bin) && (matrix.artifact_type == 'lib')
         run: |-
           mkdir -p _packages
           cp target/release/lib${{ matrix.output_name }}.* _packages/ 2>/dev/null || true
           cp target/release/${{ matrix.output_name }}.* _packages/ 2>/dev/null || true
         shell: bash
+        if: matrix.artifact_type == 'lib'
       - name: Package Binary
-        if: (matrix.has_archive) && (matrix.artifact_type == 'bin')
         run: |-
           ARCHIVE_DIR="${PWD}/_packages"
           mkdir -p "$ARCHIVE_DIR"
@@ -246,15 +210,14 @@ jobs:
               cp "$f" "$STAGING_DIR/"
             fi
           done
-
-          if [ "${{ matrix.package_type }}" = "zip" ]; then
+          if [ "${{ matrix.package_type }}" = "zip" ] || [ "${{ matrix.os }}" = "windows" ]; then
             (cd "$STAGING_DIR" && 7z a -tzip "$ARCHIVE_DIR/${{ matrix.output_name }}.zip" .) > /dev/null
           else
             tar -czf "$ARCHIVE_DIR/${{ matrix.output_name }}.tar.gz" -C "$STAGING_DIR" .
           fi
         shell: bash
+        if: matrix.artifact_type == 'bin'
       - name: Package Library
-        if: (matrix.has_archive) && (matrix.artifact_type == 'lib')
         run: |-
           ARCHIVE_DIR="${PWD}/_packages"
           mkdir -p "$ARCHIVE_DIR"
@@ -267,12 +230,54 @@ jobs:
               cp "$f" "$STAGING_DIR/"
             fi
           done
-          if [ "${{ matrix.package_type }}" = "zip" ]; then
+          if [ "${{ matrix.package_type }}" = "zip" ] || [ "${{ matrix.os }}" = "windows" ]; then
             (cd "$STAGING_DIR" && 7z a -tzip "$ARCHIVE_DIR/${{ matrix.output_name }}.zip" .) > /dev/null
           else
             tar -czf "$ARCHIVE_DIR/${{ matrix.output_name }}.tar.gz" -C "$STAGING_DIR" .
           fi
         shell: bash
+        if: matrix.artifact_type == 'lib'
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@v2
+        if: ${{ matrix.has_deb }}
+        with:
+          tool: cargo-deb
+      - name: Build .deb package
+        run: |-
+          mkdir -p _packages
+          cargo deb --target ${{ matrix.target_triple }} --no-build -o _packages/
+          for f in _packages/*.deb; do
+            [ -f "$f" ] && mv "$f" "_packages/${{ matrix.output_name }}.deb"
+          done
+        shell: bash
+        if: ${{ matrix.has_deb }}
+      - name: Install cargo-generate-rpm
+        uses: taiki-e/install-action@v2
+        if: ${{ matrix.has_rpm }}
+        with:
+          tool: cargo-generate-rpm
+      - name: Build .rpm package
+        run: |-
+          mkdir -p _packages
+          cargo generate-rpm -o _packages/
+          for f in _packages/*.rpm; do
+            [ -f "$f" ] && mv "$f" "_packages/${{ matrix.output_name }}.rpm"
+          done
+        shell: bash
+        if: ${{ matrix.has_rpm }}
+      - name: Install cargo-wix
+        uses: taiki-e/install-action@v2
+        if: ${{ matrix.has_msi }}
+        with:
+          tool: cargo-wix
+      - name: Build .msi package
+        run: |-
+          mkdir -p _packages
+          cargo wix --target ${{ matrix.target_triple }} -o _packages/
+          $msi = Get-ChildItem "_packages\*.msi" | Select-Object -First 1
+          if ($msi) { Rename-Item -Path $msi.FullName -NewName "${{ matrix.output_name }}.msi" }
+        shell: pwsh
+        if: ${{ matrix.has_msi }}
       - name: Upload Artifact
         uses: actions/upload-artifact@v7
         with:
