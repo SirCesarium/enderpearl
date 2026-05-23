@@ -141,6 +141,17 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target_triple }}
         shell: bash
+      - name: Prepare Binary
+        run: |-
+          SRC="target/${{ matrix.target_triple }}/release/${{ matrix.artifact_bin }}${{ matrix.bin_ext }}"
+          DST_ORIG="target/release/${{ matrix.artifact_bin }}${{ matrix.bin_ext }}"
+          DST_RENAMED="target/release/${{ matrix.output_name }}${{ matrix.bin_ext }}"
+
+          mkdir -p target/release
+          cp "$SRC" "$DST_ORIG"
+          cp "$SRC" "$DST_RENAMED"
+        shell: bash
+        if: matrix.artifact_type == 'bin'
       - name: Prepare Library
         run: |-
           SRCDIR="target/${{ matrix.target_triple }}/release"
@@ -177,6 +188,7 @@ jobs:
             cp "$DSTDIR/${OUT}.h" "$DSTDIR/${NAME}.h"
           fi
         shell: bash
+        if: matrix.artifact_type == 'lib'
       - name: Copy Extra Files
         run: |-
           for f in ${{ join(matrix.include_files, ' ') }}; do
