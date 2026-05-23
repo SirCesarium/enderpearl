@@ -284,7 +284,7 @@ jobs:
           tool: cargo-wix
       - name: Build .msi package
         run: |-
-          mkdir -p _packages
+          if (!(Test-Path _packages)) { New-Item -ItemType Directory -Path _packages }
           cargo wix --target ${{ matrix.target_triple }} -o _packages/
           $msi = Get-ChildItem "_packages\*.msi" | Select-Object -First 1
           if ($msi) { Rename-Item -Path $msi.FullName -NewName "${{ matrix.output_name }}.msi" }
