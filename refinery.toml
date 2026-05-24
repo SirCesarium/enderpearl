@@ -41,3 +41,20 @@ os = "macos"
 arch = [ "arm64" ]
 type = "bin"
 packages = ["bin"]
+
+[[publish]]
+type = "builtin"
+builtin = "download_artifact"
+targets = "all"
+
+[[publish]]
+type = "builtin"
+builtin = "github_release"
+targets = "all"
+
+[[publish]]
+type = "composite"
+name = "Publish to crates.io"
+action = "cargo-publish"
+secrets = ["CRATES_TOKEN"]
+targets = "once"

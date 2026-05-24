@@ -10,6 +10,8 @@ jobs:
   build:
     name: ${{ matrix.artifact }} (${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.abi || 'default' }})
     runs-on: ${{ matrix.runs_on }}
+    permissions:
+      contents: read
     env:
       CARGO_PROFILE_RELEASE_STRIP: symbols
       CARGO_PROFILE_RELEASE_LTO: "true"
@@ -43,6 +45,9 @@ jobs:
             bin_ext: ""
             headers: false
             linker_env: []
+            features: []
+            features_str: ""
+            default_features: true
             abi: gnu
           - artifact: enderpearl
             artifact_type: bin
@@ -66,6 +71,9 @@ jobs:
             bin_ext: .exe
             headers: false
             linker_env: []
+            features: []
+            features_str: ""
+            default_features: true
             abi: msvc
           - artifact: enderpearl
             artifact_type: bin
@@ -88,6 +96,9 @@ jobs:
             bin_ext: ""
             headers: false
             linker_env: []
+            features: []
+            features_str: ""
+            default_features: true
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -103,7 +114,7 @@ jobs:
         with:
           tool: cbindgen
       - name: Configure Linker and System Dependencies
-        if: matrix.apt_packages[0] != null || matrix.linker_env[0] != null
+        if: join(matrix.apt_packages, '') != '' || join(matrix.linker_env, '') != ''
         run: |-
           PKGS="${{ join(matrix.apt_packages, ' ') }}"
           if [ -n "$PKGS" ] && [ "${{ runner.os }}" = "Linux" ]; then
@@ -139,7 +150,18 @@ jobs:
         with:
           platform: x86
       - name: Build
-        run: cargo build --release --target ${{ matrix.target_triple }}
+        run: |-
+          CMD="cargo build --release"
+          CMD="$CMD --target ${{ matrix.target_triple }}"
+          FEATURES="${{ matrix.features_str }}"
+          if [ -n "$FEATURES" ]; then
+            CMD="$CMD --features \"$FEATURES\""
+          fi
+          NO_DEFAULT="${{ matrix.default_features }}"
+          if [ "$NO_DEFAULT" = "false" ]; then
+            CMD="$CMD --no-default-features"
+          fi
+          eval "$CMD"
         shell: bash
       - name: Prepare Binary
         run: |-
@@ -171,12 +193,12 @@ jobs:
           NAME="${{ matrix.artifact_bin }}"
           OUT="${{ matrix.output_name }}"
 
-          copy_lib "$SRCDIR/lib${NAME}.so" "lib${NAME}.so" "lib${OUT}.so"
-          copy_lib "$SRCDIR/lib${NAME}.dylib" "lib${NAME}.dylib" "lib${OUT}.dylib"
-          copy_lib "$SRCDIR/lib${NAME}.a" "lib${NAME}.a" "lib${OUT}.a"
+          copy_lib "$SRCDIR/lib${NAME}.so" "lib${NAME}.so" "${OUT}.so"
+          copy_lib "$SRCDIR/lib${NAME}.dylib" "lib${NAME}.dylib" "${OUT}.dylib"
+          copy_lib "$SRCDIR/lib${NAME}.a" "lib${NAME}.a" "${OUT}.a"
           copy_lib "$SRCDIR/${NAME}.dll" "${NAME}.dll" "${OUT}.dll"
           copy_lib "$SRCDIR/${NAME}.lib" "${NAME}.lib" "${OUT}.lib"
-          copy_lib "$SRCDIR/lib${NAME}.dll.a" "lib${NAME}.dll.a" "lib${OUT}.dll.a"
+          copy_lib "$SRCDIR/lib${NAME}.dll.a" "lib${NAME}.dll.a" "${OUT}.dll.a"
           copy_lib "$SRCDIR/${NAME}.wasm" "${NAME}.wasm" "${OUT}.wasm"
 
           if [ "${{ matrix.headers }}" = "true" ]; then
@@ -185,7 +207,6 @@ jobs:
             else
               cbindgen --crate "${NAME}" --output "$DSTDIR/${OUT}.h"
             fi
-            cp "$DSTDIR/${OUT}.h" "$DSTDIR/${NAME}.h"
           fi
         shell: bash
         if: matrix.artifact_type == 'lib'
@@ -206,10 +227,9 @@ jobs:
       - name: Export Library
         run: |-
           mkdir -p _packages
-          cp target/release/lib${{ matrix.output_name }}.* _packages/ 2>/dev/null || true
           cp target/release/${{ matrix.output_name }}.* _packages/ 2>/dev/null || true
         shell: bash
-        if: matrix.artifact_type == 'lib'
+        if: matrix.artifact_type == 'lib' && (matrix.has_bin || !matrix.has_archive)
       - name: Package Binary
         run: |-
           ARCHIVE_DIR="${PWD}/_packages"
@@ -222,13 +242,13 @@ jobs:
               cp "$f" "$STAGING_DIR/"
             fi
           done
-          if [ "${{ matrix.package_type }}" = "zip" ] || [ "${{ matrix.os }}" = "windows" ]; then
+          if [ "${{ matrix.os }}" = "windows" ]; then
             (cd "$STAGING_DIR" && 7z a -tzip "$ARCHIVE_DIR/${{ matrix.output_name }}.zip" .) > /dev/null
           else
             tar -czf "$ARCHIVE_DIR/${{ matrix.output_name }}.tar.gz" -C "$STAGING_DIR" .
           fi
         shell: bash
-        if: matrix.artifact_type == 'bin'
+        if: matrix.artifact_type == 'bin' && matrix.has_archive
       - name: Package Library
         run: |-
           ARCHIVE_DIR="${PWD}/_packages"
@@ -237,18 +257,19 @@ jobs:
           mkdir -p "$STAGING_DIR"
           cp target/release/lib${{ matrix.artifact_bin }}.* "$STAGING_DIR/" 2>/dev/null || true
           cp target/release/${{ matrix.artifact_bin }}.* "$STAGING_DIR/" 2>/dev/null || true
+          cp target/release/${{ matrix.output_name }}.* "$STAGING_DIR/" 2>/dev/null || true
           for f in ${{ join(matrix.include_files, ' ') }}; do
             if [ -f "$f" ]; then
               cp "$f" "$STAGING_DIR/"
             fi
           done
-          if [ "${{ matrix.package_type }}" = "zip" ] || [ "${{ matrix.os }}" = "windows" ]; then
+          if [ "${{ matrix.os }}" = "windows" ]; then
             (cd "$STAGING_DIR" && 7z a -tzip "$ARCHIVE_DIR/${{ matrix.output_name }}.zip" .) > /dev/null
           else
             tar -czf "$ARCHIVE_DIR/${{ matrix.output_name }}.tar.gz" -C "$STAGING_DIR" .
           fi
         shell: bash
-        if: matrix.artifact_type == 'lib'
+        if: matrix.artifact_type == 'lib' && matrix.has_archive
       - name: Install cargo-deb
         uses: taiki-e/install-action@v2
         if: ${{ matrix.has_deb }}
@@ -304,6 +325,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Publish to crates.io
+        uses: ./.github/actions/cargo-publish
+        env:
+          CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
       - name: Download Artifacts
         uses: actions/download-artifact@v8
         with:
