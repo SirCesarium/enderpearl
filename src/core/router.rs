@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::EnderError;
 use crate::core::{routes, types::EnderConfig};
 use crate::errors::Result;
@@ -12,11 +14,14 @@ pub struct EnderRouter {
 impl EnderRouter {
     /// Creates a new `EnderRouter` from the given configuration.
     ///
+    /// `proxy_ports` maps protocol names to local TCP ports that handle
+    /// offline-mode traffic (fake MOTD, wake commands, etc.).
+    ///
     /// # Errors
     ///
     /// Returns an error if route mapping fails or the `Refractium` engine cannot be built.
-    pub fn new(config: &EnderConfig) -> Result<Self> {
-        let (tcp_routes, udp_routes) = routes::map_to_refractium(config)?;
+    pub fn new(config: &EnderConfig, proxy_ports: &HashMap<String, u16>) -> Result<Self> {
+        let (tcp_routes, udp_routes) = routes::map_to_refractium(config, proxy_ports)?;
 
         let inner = Refractium::builder()
             .routes(tcp_routes, udp_routes)

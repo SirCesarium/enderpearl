@@ -1,6 +1,5 @@
 use std::fmt;
 
-
 #[cfg(feature = "java")]
 pub mod java;
 #[cfg(feature = "web")]
@@ -16,6 +15,8 @@ pub enum ProtocolKind {
 use crate::hooks::DebugHook;
 use crate::protocols::java::MinecraftJava;
 use refractium::hook_protocol;
+#[cfg(feature = "web")]
+use refractium::protocols::http::Http;
 use std::sync::Arc;
 
 #[cfg(feature = "java")]
@@ -51,7 +52,7 @@ impl ProtocolKind {
                     if debug {
                         Some(Arc::new(web::HookedHttp::new()))
                     } else {
-                        Some(Arc::new(refractium::protocols::http::Http))
+                        Some(Arc::new(Http))
                     }
                 }
                 #[cfg(not(feature = "web"))]
@@ -96,7 +97,6 @@ pub const PROTOCOLS: &[ProtocolMeta] = &[
         config_key: "minecraft_java",
         default_port: "127.0.0.1:25566",
     },
-
     ProtocolMeta {
         kind: ProtocolKind::Web,
         id: "http",

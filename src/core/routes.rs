@@ -1,6 +1,7 @@
+use std::collections::HashMap;
+
 use crate::core::types::EnderConfig;
-use crate::errors::{EnderError, Result};
-use crate::protocols::ProtocolKind;
+use crate::errors::Result;
 use crate::protocols::ProtocolMeta;
 use crate::{fail_config, print_cli};
 use refractium::types::{ForwardTarget, ProtocolRoute};
@@ -8,53 +9,35 @@ use refractium::Transport;
 
 /// Translates `EnderConfig` upstreams into refractium TCP/UDP route lists.
 ///
-/// Routes with Java protocols that have `offline_motd` or `wake_command` are
-/// redirected to the local `JavaProxy` port instead of their original target.
+/// Routes that have a corresponding entry in `proxy_ports` are redirected to
+/// the local proxy port instead of their original targets.
 ///
 /// # Errors
 ///
-/// Returns an error if a protocol is unknown, disabled, or the Java proxy port
-/// is missing when required.
-pub fn map_to_refractium(config: &EnderConfig) -> Result<(Vec<ProtocolRoute>, Vec<ProtocolRoute>)> {
+/// Returns an error if a known protocol is disabled via feature flags.
+#[allow(clippy::implicit_hasher)]
+pub fn map_to_refractium(
+    config: &EnderConfig,
+    proxy_ports: &HashMap<String, u16>,
+) -> Result<(Vec<ProtocolRoute>, Vec<ProtocolRoute>)> {
     let mut tcp_routes = Vec::new();
     let mut udp_routes = Vec::new();
 
     for route in &config.upstreams {
         let proto_name = route.protocol.name();
 
-        let proto_meta = ProtocolMeta::lookup(&proto_name).ok_or_else(|| {
-            EnderError::Config(
-                "protocol metadata".into(),
-                format!("'{proto_name}' not found"),
-            )
-        })?;
+        let proto_meta = ProtocolMeta::lookup(&proto_name);
 
-        if !proto_meta.is_enabled {
-            return fail_config!(
-                proto_name,
-                format!("requires '{}' feature", proto_meta.feature)
-            );
+        if let Some(meta) = proto_meta {
+            if !meta.is_enabled {
+                return fail_config!(proto_name, format!("requires '{}' feature", meta.feature));
+            }
+
+            print_cli!("{} -> {:?}", meta.kind, route.targets);
         }
 
-        #[cfg(feature = "pretty-cli")]
-        {
-            use owo_colors::OwoColorize;
-            print_cli!(
-                "{} -> {}",
-                proto_meta.kind.to_string().bright_cyan(),
-                route.targets.join(", ").underline()
-            );
-        }
-        #[cfg(not(feature = "pretty-cli"))]
-        print_cli!("{} -> {:?}", proto_meta.kind, route.targets);
-
-        let is_java = matches!(proto_meta.kind, ProtocolKind::Java);
-
-        let target = if is_java {
-            let port = config.java_proxy_port.ok_or_else(|| {
-                EnderError::Config("Java proxy".into(), "proxy port not assigned".into())
-            })?;
-            ForwardTarget::Single(format!("127.0.0.1:{port}"))
+        let target = if let Some(proxy_port) = proxy_ports.get(&proto_name) {
+            ForwardTarget::Single(format!("127.0.0.1:{proxy_port}"))
         } else if route.targets.len() == 1 {
             ForwardTarget::Single(route.targets[0].clone())
         } else {

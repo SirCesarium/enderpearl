@@ -76,6 +76,7 @@ all = "deny"
 pedantic = "deny"
 unwrap_used = "deny"
 expect_used = "deny"
+absolute_paths = "deny"
 
 [profile.release]
 opt-level = 3
