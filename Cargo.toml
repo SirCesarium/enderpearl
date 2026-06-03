@@ -31,7 +31,7 @@ tracing-subscriber = { version = "0.3", features = [
 ], optional = true }
 inquire = { version = "0.9", optional = true }
 serde_json = "1.0.150"
-reqwest = { version = "0.13.3", features = ["json", "rustls"] }
+reqwest = { version = "0.13.4", features = ["json", "rustls"] }
 
 [features]
 default = ["full"]
