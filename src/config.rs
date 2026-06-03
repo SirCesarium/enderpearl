@@ -109,6 +109,7 @@ impl TryFrom<TomlConfig> for EnderConfig {
                 Ok(EnderRoute {
                     protocol,
                     targets,
+                    proxy: None,
                     startup_on: match route.startup_on {
                         TomlStartupOn::Join => StartupOn::Join,
                         TomlStartupOn::Ping => StartupOn::Ping,
@@ -132,7 +133,6 @@ impl TryFrom<TomlConfig> for EnderConfig {
             peek_buffer_size: toml.server.peek_buffer_size,
             peek_timeout_ms: toml.server.peek_timeout_ms,
             upstreams,
-            java_proxy_port: None,
             debug: toml.server.debug,
         })
     }

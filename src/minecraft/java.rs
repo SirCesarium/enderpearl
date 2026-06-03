@@ -1,13 +1,19 @@
-use crate::core::types::{StartupOn, LifecycleHandler};
-use crate::errors::{EnderError, Result};
-use crate::minecraft::varint::{decode_string, decode_varint, encode_mc_packet, encode_varint, read_varint};
+#![allow(clippy::redundant_closure_for_method_calls)]
+
+use std::future::Future;
+use std::pin::Pin;
 use std::net::Ipv4Addr;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::sync::OnceLock;
+use crate::core::types::{ServerProxy, StartupOn, LifecycleHandler};
+use crate::errors::{EnderError, Result};
+use crate::minecraft::varint::{decode_string, decode_varint, encode_mc_packet, encode_varint, read_varint};
+use tokio::io::{self, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
+use tokio::time::{sleep, timeout, Duration, Instant};
 use serde_json::json;
 use reqwest::Client;
 
@@ -43,7 +49,7 @@ impl JavaProxy {
     /// # Errors
     ///
     /// Returns an error if the TCP listener cannot be bound.
-    pub async fn serve(self: Arc<Self>) -> Result<u16> {
+    pub async fn run(self: Arc<Self>) -> Result<u16> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let port = listener.local_addr()?.port();
 
@@ -80,15 +86,15 @@ impl JavaProxy {
     }
 
     async fn spawn_monitor(&self) -> Result<()> {
-        let mut empty_since: Option<tokio::time::Instant> = None;
+        let mut empty_since: Option<Instant> = None;
         let target = self.targets[0].clone();
 
         loop {
-            tokio::time::sleep(Duration::from_secs(self.check_interval_secs)).await;
+            sleep(Duration::from_secs(self.check_interval_secs)).await;
 
             match get_player_count(&target).await {
                 Ok(count) if count <= self.min_players => {
-                    let now = tokio::time::Instant::now();
+                    let now = Instant::now();
                     match empty_since {
                         Some(start) => {
                             if now.duration_since(start).as_secs() >= self.shutdown_timeout_secs
@@ -144,7 +150,7 @@ impl JavaProxy {
             if timeout(Duration::from_millis(500), TcpStream::connect(target))
                 .await
                 .ok()
-                .and_then(std::result::Result::ok)
+                .and_then(|r| r.ok())
                 .is_some()
             {
                 return true;
@@ -190,6 +196,14 @@ impl JavaProxy {
         stream.write_all(&encode_mc_packet(&packet)?).await.map_err(EnderError::Io)?;
         
         Ok(())
+    }
+}
+
+impl ServerProxy for JavaProxy {
+    fn serve(
+        self: Arc<Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<u16>> + Send>> {
+        Box::pin(async move { self.run().await })
     }
 }
 
@@ -254,8 +268,8 @@ async fn proxy_to_backend(client: &mut TcpStream, targets: &[String], initial_pa
                 let (mut backend_read, mut backend_write) = backend.split();
 
                 let _ = tokio::join!(
-                    tokio::io::copy(&mut client_read, &mut backend_write),
-                    tokio::io::copy(&mut backend_read, &mut client_write)
+                    io::copy(&mut client_read, &mut backend_write),
+                    io::copy(&mut backend_read, &mut client_write)
                 );
                 return Ok(());
             }
@@ -342,7 +356,7 @@ pub async fn execute_command(cmd: &str, timeout_secs: u64) -> Result<()> {
                 if timeout(Duration::from_secs(10), child.wait())
                     .await
                     .ok()
-                    .and_then(std::result::Result::ok)
+                    .and_then(|r| r.ok())
                     .is_none()
                 {
                     tracing::warn!("Process still alive after SIGTERM, sending SIGKILL");
@@ -354,9 +368,9 @@ pub async fn execute_command(cmd: &str, timeout_secs: u64) -> Result<()> {
         let mut child = Command::new("sh")
             .arg("-c")
             .arg(cmd)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(EnderError::Io)?;
 
@@ -391,9 +405,9 @@ pub async fn execute_command(cmd: &str, timeout_secs: u64) -> Result<()> {
         // Forward parent stdin → child stdin
         if let Some(child_in) = child_stdin {
             tokio::spawn(async move {
-                let mut stdin = tokio::io::stdin();
+                let mut stdin = io::stdin();
                 let mut child_in = child_in;
-                let _ = tokio::io::copy(&mut stdin, &mut child_in).await;
+                let _ = io::copy(&mut stdin, &mut child_in).await;
             });
         }
 
@@ -415,10 +429,10 @@ fn target_port_only(target: &str) -> u16 {
 }
 
 async fn wait_for_server_shutdown(target: &str, timeout_secs: u64) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        if tokio::time::Instant::now() >= deadline {
+        sleep(Duration::from_secs(1)).await;
+        if Instant::now() >= deadline {
             let port = target_port_only(target);
             tracing::warn!("Server didn't shut down after {timeout_secs}s, force killing port {port}");
             let _ = Command::new("sh")
@@ -426,13 +440,13 @@ async fn wait_for_server_shutdown(target: &str, timeout_secs: u64) {
                 .arg(format!("kill -9 $(lsof -ti :{port} -sTCP:LISTEN) 2>/dev/null"))
                 .spawn();
             // Wait a moment for the kill to take effect
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            sleep(Duration::from_secs(2)).await;
             return;
         }
         if timeout(Duration::from_secs(2), TcpStream::connect(target))
             .await
             .ok()
-            .and_then(std::result::Result::ok)
+            .and_then(|r| r.ok())
             .is_none()
         {
             tracing::info!("Server shut down gracefully");
@@ -441,12 +455,25 @@ async fn wait_for_server_shutdown(target: &str, timeout_secs: u64) {
     }
 }
 
+fn send_webhook(url: &str, content: &str) {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    let client = CLIENT.get_or_init(Client::new);
+    let body = json!({ "content": content });
+    let url = url.to_string();
+    tokio::spawn(async move {
+        if let Err(e) = client.post(&url).json(&body).send().await {
+            tracing::error!("Webhook POST to {url} failed: {e}");
+        }
+    });
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
     fn make_handshake_data(proto_ver: i32, addr: &str, port: u16, next_state: i32) -> Vec<u8> {
-        let mut buf = encode_varint(0x00); // packet ID
+        let mut buf = encode_varint(0x00);
         buf.extend_from_slice(&encode_varint(proto_ver));
         buf.extend_from_slice(&encode_mc_packet(addr.as_bytes()).unwrap());
         buf.extend_from_slice(&port.to_be_bytes());
@@ -474,7 +501,6 @@ mod tests {
     #[test]
     fn parse_handshake_invalid_packet_id() {
         let mut data = make_handshake_data(766, "localhost", 25565, 1);
-        // corrupt packet ID to 0x01
         let mut offset = 0;
         let _len = decode_varint(&data, &mut offset).unwrap();
         data[offset] = 0x01;
@@ -483,31 +509,16 @@ mod tests {
 
     #[test]
     fn parse_handshake_truncated() {
-        let data = [0x01, 0x00]; // too short
+        let data = [0x01, 0x00];
         assert!(parse_handshake(&data).is_err());
     }
 
     #[test]
     fn get_player_count_port_is_parsed() {
-        // Test that the target port is used (not hardcoded 25565)
-        // We just check the function exists and the signature is right
-        // by verifying we can call it with any string
         let target = "127.0.0.1:25566";
         let (hostname, port) = target.rsplit_once(':').unwrap();
         let port: u16 = port.parse().unwrap();
         assert_eq!(port, 25566);
         assert_eq!(hostname, "127.0.0.1");
     }
-}
-
-fn send_webhook(url: &str, content: &str) {
-    static CLIENT: std::sync::OnceLock<Client> = std::sync::OnceLock::new();
-    let client = CLIENT.get_or_init(Client::new);
-    let body = json!({ "content": content });
-    let url = url.to_string();
-    tokio::spawn(async move {
-        if let Err(e) = client.post(&url).json(&body).send().await {
-            tracing::error!("Webhook POST to {url} failed: {e}");
-        }
-    });
 }

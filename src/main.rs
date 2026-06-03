@@ -1,15 +1,19 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::{fs, process};
+
 use anyhow::Context;
 use clap::{CommandFactory, Parser};
-use enderpearl::cli::{Cli, Commands};
+use enderpearl::cli::{Cli, Commands, handle_init};
 use enderpearl::config::TomlConfig;
 use enderpearl::core::router::EnderRouter;
 use enderpearl::core::types::{EnderConfig, LifecycleHandler, AsyncResultFuture};
 use enderpearl::display::EnderDisplay;
 use enderpearl::minecraft;
-use enderpearl::protocols::{ProtocolKind, PROTOCOLS};
+use enderpearl::minecraft::java::execute_command;
+use enderpearl::protocols::{ProtocolKind, ProtocolMeta, PROTOCOLS};
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::{fs, process};
 
 #[tokio::main]
 async fn main() {
@@ -44,7 +48,7 @@ impl LifecycleHandler for ShellLifecycleHandler {
         let cmd = self.startup_cmd.clone();
         Box::pin(async move {
             if let Some(c) = cmd {
-                enderpearl::minecraft::java::execute_command(&c, 0).await?;
+                execute_command(&c, 0).await?;
             }
             Ok(())
         })
@@ -55,11 +59,18 @@ impl LifecycleHandler for ShellLifecycleHandler {
         let timeout = self.shutdown_timeout_secs;
         Box::pin(async move {
             if let Some(c) = cmd {
-                enderpearl::minecraft::java::execute_command(&c, timeout).await?;
+                execute_command(&c, timeout).await?;
             }
             Ok(())
         })
     }
+}
+
+fn is_java_protocol(name: &str) -> bool {
+    PROTOCOLS.iter().any(|p| {
+        matches!(p.kind, ProtocolKind::Java)
+            && (p.id == name || p.aliases.contains(&name))
+    })
 }
 
 async fn run() -> anyhow::Result<()> {
@@ -77,7 +88,7 @@ async fn run() -> anyhow::Result<()> {
 
     match cli.command {
         Some(Commands::Init) => {
-            enderpearl::cli::handle_init(&cli.config)?;
+            handle_init(&cli.config)?;
             return Ok(());
         }
         Some(Commands::Run) | None => {}
@@ -99,9 +110,14 @@ async fn run() -> anyhow::Result<()> {
 
     let mut config = EnderConfig::try_from(toml_config.clone())?;
 
-    // Inject shell handlers from TOML into the agnostic config
-    for (name, toml_route) in &toml_config.upstream {
-        if let Some(route) = config.upstreams.iter_mut().find(|r| r.protocol.name() == *name || name == "minecraft_java")
+    // Inject shell handlers and proxy wrappers from TOML config
+    for (toml_key, toml_route) in &toml_config.upstream {
+        let name: &str = match ProtocolMeta::lookup(toml_key) {
+            Some(meta) => meta.id,
+            None => toml_key,
+        };
+
+        if let Some(route) = config.upstreams.iter_mut().find(|r| r.protocol.name() == name)
             && (toml_route.startup_cmd.is_some() || toml_route.shutdown_cmd.is_some())
         {
             route.handler = Some(Arc::new(ShellLifecycleHandler {
@@ -110,34 +126,34 @@ async fn run() -> anyhow::Result<()> {
                 shutdown_timeout_secs: route.shutdown_timeout_secs,
             }));
         }
+
+        if is_java_protocol(toml_key)
+            && let Some(route) = config.upstreams.iter_mut().find(|r| r.protocol.name() == name)
+        {
+                route.proxy = Some(Arc::new(minecraft::java::JavaProxy {
+                    targets: route.targets.clone(),
+                    startup_on: route.startup_on,
+                    handler: route.handler.clone(),
+                    shutdown_timeout_secs: route.shutdown_timeout_secs,
+                    check_interval_secs: route.check_interval_secs,
+                    min_players: route.min_players,
+                    offline_motd: route.offline_motd.clone(),
+                    offline_message: route.offline_message.clone(),
+                    startup_webhook: route.startup_webhook.clone(),
+                    shutdown_webhook: route.shutdown_webhook.clone(),
+                    debug: config.debug,
+                    is_waking: AtomicBool::new(false),
+                }));
+            }
     }
 
-    if let Some(route) = config
-        .upstreams
-        .iter()
-        .find(|r| {
-            let name = r.protocol.name();
-            PROTOCOLS.iter().any(|p| {
-                matches!(p.kind, ProtocolKind::Java)
-                    && (p.id == name || p.aliases.contains(&name.as_str()))
-            })
-        })
-    {
-        let proxy = Arc::new(minecraft::java::JavaProxy {
-            targets: route.targets.clone(),
-            startup_on: route.startup_on,
-            handler: route.handler.clone(),
-            shutdown_timeout_secs: route.shutdown_timeout_secs,
-            check_interval_secs: route.check_interval_secs,
-            min_players: route.min_players,
-            offline_motd: route.offline_motd.clone(),
-            offline_message: route.offline_message.clone(),
-            startup_webhook: route.startup_webhook.clone(),
-            shutdown_webhook: route.shutdown_webhook.clone(),
-            debug: config.debug,
-            is_waking: std::sync::atomic::AtomicBool::new(false),
-        });
-        config.java_proxy_port = Some(proxy.serve().await?);
+    // Start all proxies and collect their local ports
+    let mut proxy_ports: HashMap<String, u16> = HashMap::new();
+    for route in &config.upstreams {
+        if let Some(ref proxy) = route.proxy {
+            let port = proxy.clone().serve().await?;
+            proxy_ports.insert(route.protocol.name().clone(), port);
+        }
     }
 
     let addr: SocketAddr = format!("{}:{}", config.bind, config.port)
@@ -153,7 +169,7 @@ async fn run() -> anyhow::Result<()> {
     EnderDisplay::print_listen(&addr);
     EnderDisplay::print_features();
 
-    let router = EnderRouter::new(&config)
+    let router = EnderRouter::new(&config, &proxy_ports)
         .context("Router initialization failed (check if protocol features are enabled)")?;
 
     router

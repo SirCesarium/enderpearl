@@ -112,6 +112,7 @@ pub fn decode_string(data: &[u8], offset: &mut usize) -> Result<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

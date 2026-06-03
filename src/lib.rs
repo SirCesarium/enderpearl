@@ -11,4 +11,5 @@ pub mod protocols;
 pub(crate) mod macros;
 
 pub use crate::core::router::EnderRouter;
+pub use crate::core::types::{EnderConfig, EnderRoute, LifecycleHandler, ServerProxy, StartupOn};
 pub use crate::errors::{EnderError, Result};
