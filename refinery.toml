@@ -2,12 +2,6 @@ version = 1
 platform = "github"
 lang = "rust"
 
-[release]
-strip = true
-lto = true
-codegenUnits = 1
-panic = "abort"
-
 [[artifacts]]
 type = "bin"
 name = "enderpearl"
