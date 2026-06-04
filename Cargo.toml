@@ -1,6 +1,6 @@
 [package]
 name = "enderpearl"
-version = "0.1.10"
+version = "0.1.12"
 edition = "2024"
 authors = ["SirCesarium"]
 description = "Async proxy for Minecraft and HTTP traffic with automated server wake-up."
