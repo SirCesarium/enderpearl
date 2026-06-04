@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "enderpearl"
-version = "0.1.10"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "clap",
