@@ -12,8 +12,11 @@ pub enum ProtocolKind {
     Web,
 }
 
+#[cfg(feature = "java")]
 use crate::hooks::DebugHook;
+#[cfg(feature = "java")]
 use crate::protocols::java::MinecraftJava;
+#[cfg(feature = "java")]
 use refractium::hook_protocol;
 #[cfg(feature = "web")]
 use refractium::protocols::http::Http;
