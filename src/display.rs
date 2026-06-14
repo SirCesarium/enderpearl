@@ -1,5 +1,8 @@
 use std::net::SocketAddr;
 
+#[cfg(not(feature = "pretty-cli"))]
+use crate::info;
+
 #[cfg(feature = "pretty-cli")]
 use owo_colors::OwoColorize;
 

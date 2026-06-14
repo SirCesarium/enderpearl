@@ -5,10 +5,11 @@ pub mod core;
 pub mod display;
 pub mod errors;
 pub mod hooks;
+#[cfg(feature = "java")]
 pub mod minecraft;
 pub mod protocols;
 
-pub(crate) mod macros;
+pub mod macros;
 
 pub use crate::core::router::EnderRouter;
 pub use crate::core::types::{EnderConfig, EnderRoute, LifecycleHandler, ServerProxy, StartupOn};
