@@ -9,7 +9,7 @@ use enderpearl::cli::{Cli, Commands, handle_init};
 use enderpearl::config::TomlConfig;
 use enderpearl::core::router::EnderRouter;
 use enderpearl::core::types::{EnderConfig, LifecycleHandler, AsyncResultFuture};
-use enderpearl::display::EnderDisplay;
+use enderpearl::EnderDisplay;
 use enderpearl::minecraft;
 use enderpearl::minecraft::java::execute_command;
 use enderpearl::protocols::{ProtocolKind, ProtocolMeta, PROTOCOLS};
